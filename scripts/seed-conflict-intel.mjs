@@ -265,7 +265,7 @@ async function fetchAll() {
   if (pizzint.status === 'rejected') console.warn(`  PizzINT failed: ${pizzint.reason?.message || pizzint.reason}`);
   if (gdelt.status === 'rejected') console.warn(`  GDELT failed: ${gdelt.reason?.message || gdelt.reason}`);
 
-  if (!ac && !pi) throw new Error('All conflict/intel fetches failed');
+  if (!ac && !ha && !pi) throw new Error('All conflict/intel fetches failed');
 
   // Write secondary keys BEFORE returning (runSeed calls process.exit after primary write)
   if (ha) { for (const [cc, data] of Object.entries(ha)) await writeExtraKeyWithMeta(`${HAPI_CACHE_KEY_PREFIX}:${cc}`, data, HAPI_TTL, 1); }
@@ -276,7 +276,7 @@ async function fetchAll() {
 }
 
 function validate(data) {
-  return data?.events?.length > 0;
+  return data != null && Array.isArray(data.events);
 }
 
 runSeed('conflict', 'acled-intel', ACLED_CACHE_KEY, fetchAll, {
