@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+let _S3Client, _PutObjectCommand;
+async function loadS3SDK() {
+  if (!_S3Client) {
+    const sdk = await import('@aws-sdk/client-s3');
+    _S3Client = sdk.S3Client;
+    _PutObjectCommand = sdk.PutObjectCommand;
+  }
+  return { S3Client: _S3Client, PutObjectCommand: _PutObjectCommand };
+}
 
 function getEnvValue(env, keys) {
   for (const key of keys) {
@@ -61,7 +69,7 @@ function resolveR2StorageConfig(env = process.env, options = {}) {
 
 const CLIENT_CACHE = new Map();
 
-function getR2StorageClient(config) {
+async function getR2StorageClient(config) {
   const cacheKey = JSON.stringify({
     endpoint: config.endpoint,
     region: config.region,
@@ -71,6 +79,7 @@ function getR2StorageClient(config) {
   });
   let client = CLIENT_CACHE.get(cacheKey);
   if (!client) {
+    const { S3Client } = await loadS3SDK();
     client = new S3Client({
       endpoint: config.endpoint,
       region: config.region,
@@ -103,7 +112,8 @@ async function putR2JsonObject(config, key, payload, metadata = {}) {
     return { bucket: config.bucket, key, bytes: Buffer.byteLength(body, 'utf8') };
   }
 
-  const client = getR2StorageClient(config);
+  const { PutObjectCommand } = await loadS3SDK();
+  const client = await getR2StorageClient(config);
   await client.send(new PutObjectCommand({
     Bucket: config.bucket,
     Key: key,
