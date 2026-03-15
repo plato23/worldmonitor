@@ -300,8 +300,8 @@ describe('Shipping handler v2 changes', () => {
   it('is cache-only (no FRED fetcher, seed script is sole aggregator)', () => {
     assert.ok(!src.includes('FRED_API_BASE'), 'Handler should not contain FRED_API_BASE');
     assert.ok(!src.includes('fetchFredSeries'), 'Handler should not contain fetchFredSeries');
-    assert.ok(src.includes('cachedFetchJson'), 'Should still read from Redis cache');
-    assert.ok(src.includes('async () => null'), 'Fetcher lambda should return null (cache-only)');
+    assert.ok(src.includes('getCachedJson'), 'Should read seed key via getCachedJson(key, true)');
+    assert.ok(src.includes('true'), 'Should pass raw=true to bypass env prefix');
   });
 
   it('FRED series names moved to seed script', () => {

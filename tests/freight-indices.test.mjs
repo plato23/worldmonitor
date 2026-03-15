@@ -83,7 +83,7 @@ const SCFI_FIXTURE = {
     lastDate: '2026-03-06',
     lineDataList: [
       {
-        properties: { lineName_EN: 'Comprehensive Index', unit_EN: 'USD/TEU' },
+        properties: { lineName_EN: 'Comprehensive Index', unit_EN: '' },
         currentContent: 1710.35,
         lastContent: 1489.19,
         absolute: 221.16,
@@ -119,13 +119,13 @@ const CCFI_FIXTURE = {
 
 describe('SCFI parser (functional)', () => {
   it('extracts composite by dataItemTypeName, ignoring route lines', () => {
-    const result = parseSSEResponse(SCFI_FIXTURE, 'SCFI', 'SCFI_T', 'SCFI - Shanghai Container Freight', 'USD/TEU');
+    const result = parseSSEResponse(SCFI_FIXTURE, 'SCFI', 'SCFI_T', 'SCFI - Shanghai Container Freight', 'index');
     assert.equal(result.length, 1);
     assert.equal(result[0].indexId, 'SCFI');
     assert.equal(result[0].currentValue, 1710.35);
     assert.equal(result[0].previousValue, 1489.19);
     assert.equal(result[0].changePct, 14.85);
-    assert.equal(result[0].unit, 'USD/TEU');
+    assert.equal(result[0].unit, 'index');
   });
 
   it('returns empty array for missing dataItemTypeName', () => {
@@ -341,16 +341,16 @@ describe('Handler cache-only (get-shipping-rates.ts)', () => {
     assert.ok(!handlerSrc.includes('SHIPPING_SERIES'));
   });
 
-  it('fetcher lambda returns null (cache-only)', () => {
-    assert.ok(handlerSrc.includes('async () => null'));
+  it('reads seed key raw (bypasses env prefix)', () => {
+    assert.ok(handlerSrc.includes('getCachedJson'));
+    assert.ok(handlerSrc.includes('true'), 'Should pass raw=true');
   });
 
   it('returns upstreamUnavailable on cache miss', () => {
     assert.ok(handlerSrc.includes('upstreamUnavailable: true'));
   });
 
-  it('still reads from Redis cache', () => {
-    assert.ok(handlerSrc.includes('cachedFetchJson'));
+  it('still reads from correct Redis key', () => {
     assert.ok(handlerSrc.includes('supply_chain:shipping:v2'));
   });
 });

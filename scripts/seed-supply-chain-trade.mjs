@@ -110,7 +110,7 @@ async function fetchSSEIndex(indexName, indexId, dataItemType, displayName, unit
 }
 
 async function fetchSCFI() {
-  return fetchSSEIndex('scfi', 'SCFI', 'SCFI_T', 'SCFI - Shanghai Container Freight', 'USD/TEU');
+  return fetchSSEIndex('scfi', 'SCFI', 'SCFI_T', 'SCFI - Shanghai Container Freight', 'index');
 }
 
 async function fetchCCFI() {
