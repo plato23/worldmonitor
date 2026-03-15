@@ -653,12 +653,7 @@ export default defineConfig({
         runtimeCaching: [
           {
             urlPattern: ({ request }: { request: Request }) => request.mode === 'navigate',
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'html-navigation',
-              networkTimeoutSeconds: 5,
-              cacheableResponse: { statuses: [200] },
-            },
+            handler: 'NetworkOnly',
           },
           {
             urlPattern: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>

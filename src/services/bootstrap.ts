@@ -1,4 +1,4 @@
-import { toApiUrl } from '@/services/runtime';
+import { isDesktopRuntime, toApiUrl } from '@/services/runtime';
 
 const hydrationCache = new Map<string, unknown>();
 
@@ -28,12 +28,11 @@ async function fetchTier(tier: string, signal: AbortSignal): Promise<void> {
 }
 
 export async function fetchBootstrapData(): Promise<void> {
-  // Bootstrap is opportunistic; cap the request aggressively so first paint
-  // falls through to panel fetches instead of stalling startup.
   const fastCtrl = new AbortController();
   const slowCtrl = new AbortController();
-  const fastTimeout = setTimeout(() => fastCtrl.abort(), 1200);
-  const slowTimeout = setTimeout(() => slowCtrl.abort(), 1800);
+  const desktop = isDesktopRuntime();
+  const fastTimeout = setTimeout(() => fastCtrl.abort(), desktop ? 5_000 : 1_200);
+  const slowTimeout = setTimeout(() => slowCtrl.abort(), desktop ? 8_000 : 1_800);
   try {
     await Promise.all([
       fetchTier('slow', slowCtrl.signal),
