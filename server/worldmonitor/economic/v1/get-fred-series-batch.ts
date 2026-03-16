@@ -12,10 +12,9 @@ import type {
 
 import { getCachedJson } from '../../../_shared/redis';
 import { toUniqueSortedLimited } from '../../../_shared/normalize-list';
+import { applyFredObservationLimit, fredSeedKey, normalizeFredLimit } from './_fred-shared';
 
-const FRED_KEY_PREFIX = 'economic:fred:v1';
-
-const ALLOWED_SERIES = new Set([
+const ALLOWED_SERIES = new Set<string>([
   'WALCL', 'FEDFUNDS', 'T10Y2Y', 'UNRATE', 'CPIAUCSL', 'DGS10', 'VIXCLS',
   'GDP', 'M2SL', 'DCOILWTICO',
 ]);
@@ -29,10 +28,10 @@ export async function getFredSeriesBatch(
       .map((id) => id.trim().toUpperCase())
       .filter((id) => ALLOWED_SERIES.has(id));
     const limitedList = toUniqueSortedLimited(normalized, 10);
-    const limit = req.limit > 0 ? Math.min(req.limit, 1000) : 120;
+    const limit = normalizeFredLimit(req.limit);
 
     const settled = await Promise.allSettled(
-      limitedList.map((id) => getCachedJson(`${FRED_KEY_PREFIX}:${id}:0`, true)),
+      limitedList.map((id) => getCachedJson(fredSeedKey(id), true)),
     );
 
     const results: Record<string, FredSeries> = {};
@@ -41,14 +40,7 @@ export async function getFredSeriesBatch(
       const entry = settled[i];
       if (entry?.status !== 'fulfilled' || !entry.value) continue;
       const cached = entry.value as { series?: FredSeries };
-      if (cached?.series) {
-        const series = cached.series;
-        if (limit > 0 && series.observations.length > limit) {
-          results[id] = { ...series, observations: series.observations.slice(-limit) };
-        } else {
-          results[id] = series;
-        }
-      }
+      if (cached?.series) results[id] = applyFredObservationLimit(cached.series, limit);
     }
 
     return {
