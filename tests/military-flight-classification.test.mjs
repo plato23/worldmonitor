@@ -246,6 +246,7 @@ describe('military flight classification', () => {
       lat: 51.6,
       sourceMeta: {
         source: 'wingbits',
+        rawKeys: ['operatorName', 'operatorCode', 'registration'],
         operatorName: 'Qatar Emiri Air Force',
         operatorCode: 'QEAF',
         aircraftTypeLabel: 'military transport',
@@ -262,5 +263,26 @@ describe('military flight classification', () => {
     assert.equal(audit.samples.accepted[0].operatorInferenceReason, 'source_metadata');
     assert.equal(audit.samples.accepted[0].sourceMeta.operatorCode, 'QEAF');
     assert.equal(audit.samples.accepted[0].sourceMeta.registration, 'QA-202');
+    assert.equal(audit.stageWaterfall.rawStates, 1);
+    assert.equal(audit.stageWaterfall.positionEligible, 1);
+    assert.equal(audit.stageWaterfall.sourceMetaAttached, 1);
+    assert.equal(audit.stageWaterfall.callsignPresent, 0);
+    assert.equal(audit.stageWaterfall.hexMatched, 1);
+    assert.equal(audit.stageWaterfall.candidateStates, 1);
+    assert.equal(audit.stageWaterfall.admittedFlights, 1);
+    assert.equal(audit.stageWaterfall.typedFlights, 1);
+    assert.equal(audit.stageWaterfall.operatorResolved, 1);
+    assert.equal(audit.sourceCoverage.operatorNamePresent, 1);
+    assert.equal(audit.sourceCoverage.operatorCodePresent, 1);
+    assert.equal(audit.sourceCoverage.registrationPresent, 1);
+    assert.equal(audit.sourceCoverage.militaryHint, 1);
+    assert.equal(audit.sourceCoverage.militaryOperatorHint, 1);
+    assert.equal(audit.sourceCoverage.sourceOperatorCandidateHits, 1);
+    assert.equal(audit.sourceCoverage.sourceTypeCandidateHits, 1);
+    assert.deepEqual(audit.sourceCoverage.topRawKeys, [
+      { key: 'operatorCode', count: 1 },
+      { key: 'operatorName', count: 1 },
+      { key: 'registration', count: 1 },
+    ]);
   });
 });
