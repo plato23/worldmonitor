@@ -1044,7 +1044,10 @@ async function seedUcdpEvents() {
     const fetches = [];
     for (let offset = 0; offset < UCDP_MAX_PAGES && (newestPage - offset) >= 0; offset++) {
       const pg = newestPage - offset;
-      fetches.push(pg === 0 ? Promise.resolve(page0) : ucdpFetchPage(version, pg).catch(() => FAILED));
+      fetches.push(pg === 0 ? Promise.resolve(page0) : ucdpFetchPage(version, pg).catch((err) => {
+        console.warn(`[UCDP] page ${pg}: ${err.message || err}`);
+        return FAILED;
+      }));
     }
     const pageResults = await Promise.all(fetches);
 
@@ -1056,6 +1059,16 @@ async function seedUcdpEvents() {
       const events = Array.isArray(raw?.Result) ? raw.Result : [];
       allEvents.push(...events);
       for (const e of events) {
+        const ms = e?.date_start ? Date.parse(String(e.date_start)) : NaN;
+        if (Number.isFinite(ms) && (!Number.isFinite(latestMs) || ms > latestMs)) latestMs = ms;
+      }
+    }
+
+    // Fallback: if all newest-page fetches failed, use page 0 data (oldest but valid)
+    if (allEvents.length === 0 && failedPages > 0 && Array.isArray(page0?.Result) && page0.Result.length > 0) {
+      console.warn(`[UCDP] All ${failedPages} newest pages failed, falling back to page 0 (${page0.Result.length} events)`);
+      allEvents.push(...page0.Result);
+      for (const e of page0.Result) {
         const ms = e?.date_start ? Date.parse(String(e.date_start)) : NaN;
         if (Number.isFinite(ms) && (!Number.isFinite(latestMs) || ms > latestMs)) latestMs = ms;
       }
@@ -1081,6 +1094,14 @@ async function seedUcdpEvents() {
       violenceType: UCDP_VIOLENCE_TYPE_MAP[e.type_of_violence] || 'UCDP_VIOLENCE_TYPE_UNSPECIFIED',
       sourceOriginal: (e.source_original || '').substring(0, 300),
     })).sort((a, b) => b.dateStart - a.dateStart).slice(0, UCDP_MAX_EVENTS);
+
+    // If we still have 0 events after fallback, extend existing key TTL instead of overwriting with empty
+    if (mapped.length === 0) {
+      console.warn(`[UCDP] 0 events after processing (failed pages: ${failedPages}), extending existing key TTL`);
+      try { await upstashExpire(UCDP_REDIS_KEY, UCDP_TTL_SECONDS); } catch {}
+      await upstashSet('seed-meta:conflict:ucdp-events', { fetchedAt: Date.now(), recordCount: 0, extended: true }, 604800);
+      return;
+    }
 
     const payload = { events: mapped, fetchedAt: Date.now(), version, totalRaw: allEvents.length, filteredCount: mapped.length };
     const ok = await upstashSet(UCDP_REDIS_KEY, payload, UCDP_TTL_SECONDS);
