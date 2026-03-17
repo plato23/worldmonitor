@@ -52,7 +52,7 @@ export function wrapProWidgetHtml(bodyContent: string): string {
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; connect-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com; style-src 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com; img-src data: https://unpkg.com; connect-src 'none'; font-src https://cdnjs.cloudflare.com https://unpkg.com;">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 body{margin:0;padding:12px;background:#0a0e14;color:#e0e0e0;font-family:system-ui,sans-serif;overflow-y:auto;box-sizing:border-box}

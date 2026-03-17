@@ -8188,14 +8188,38 @@ Generate ONLY the <body> content — NO <!DOCTYPE>, NO <html>, NO <head> wrapper
 ## JavaScript rules
 - Embed all data as: const DATA = <json from tool results>;
 - Do NOT use fetch() — data must be pre-embedded
-- Chart.js is available: <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 - Inline <script> tags are allowed
 - Interactive elements are encouraged: sort buttons, tabs, tooltips, animated counters
+
+## Available CDN libraries (load via <script src="..."> in body)
+Chart.js (bar, line, pie, doughnut, radar):
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+
+ApexCharts (candlestick, area, financial time-series):
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3/dist/apexcharts.min.js"></script>
+
+Apache ECharts (heatmaps, treemaps, sunburst, geo, gauge):
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+
+Plotly.js (choropleth maps, 3D, candlestick — large, use only when needed):
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2/plotly.min.js"></script>
+
+D3.js (custom SVG, force graphs, arc diagrams, custom scales):
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+
+Leaflet.js (interactive maps with markers — no API key needed):
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1/dist/leaflet.js"></script>
+
+Lodash (groupBy, sortBy, keyBy, data manipulation):
+  <script src="https://cdn.jsdelivr.net/npm/lodash@4/lodash.min.js"></script>
+
+Pick the library that best fits the data. Prefer Chart.js for simple charts, ECharts for heatmaps/complex, ApexCharts for financial/candlestick, Leaflet for geographic maps.
 
 ## Design
 - Dark theme already applied by host page (background #0a0e14, color #e0e0e0)
 - Design for 400px height with overflow-y: auto for larger content
-- Use inline styles (no external CSS)
+- Use inline styles (no external CSS needed — CDN libraries handle their own styles)
 - Always include a source footer
 
 ## Output format
