@@ -1,5 +1,6 @@
 import { getLocationName, type GeoConvergenceAlert } from './geo-convergence';
 import type { CountryScore } from './country-instability';
+import { getLatestSanctionsPressure, type SanctionsPressureResult } from './sanctions-pressure';
 import { getLatestRadiationWatch, type RadiationObservation } from './radiation';
 import type { CascadeResult, CascadeImpactLevel } from '@/types';
 import { calculateCII, isInLearningMode } from './country-instability';
@@ -8,7 +9,7 @@ import { t } from '@/services/i18n';
 import type { TheaterPostureSummary } from '@/services/military-surge';
 
 export type AlertPriority = 'critical' | 'high' | 'medium' | 'low';
-export type AlertType = 'convergence' | 'cii_spike' | 'cascade' | 'radiation' | 'composite';
+export type AlertType = 'convergence' | 'cii_spike' | 'cascade' | 'sanctions' | 'radiation' | 'composite';
 
 export interface UnifiedAlert {
   id: string;
@@ -20,6 +21,7 @@ export interface UnifiedAlert {
     convergence?: GeoConvergenceAlert;
     ciiChange?: CIIChangeAlert;
     cascade?: CascadeAlert;
+    sanctions?: SanctionsAlert;
     radiation?: RadiationAlert;
   };
   location?: { lat: number; lon: number };
@@ -43,6 +45,20 @@ export interface CascadeAlert {
   sourceType: string;
   countriesAffected: number;
   highestImpact: CascadeImpactLevel;
+}
+
+
+export interface SanctionsAlert {
+  countryCode: string;
+  countryName: string;
+  entryCount: number;
+  newEntryCount: number;
+  topProgram: string;
+  topProgramCount: number;
+  vesselCount: number;
+  aircraftCount: number;
+  totalCount: number;
+  datasetDate: number | null;
 }
 
 export interface RadiationAlert {
@@ -131,6 +147,15 @@ function getPriorityFromConvergence(score: number, typeCount: number): AlertPrio
   if (typeCount >= 4 || score >= 90) return 'critical';
   if (typeCount >= 3 || score >= 70) return 'high';
   if (score >= 50) return 'medium';
+  return 'low';
+}
+
+
+function getPriorityFromSanctions(data: SanctionsPressureResult): AlertPriority {
+  const leadEntryCount = data.countries[0]?.entryCount ?? 0;
+  if (data.newEntryCount >= 10) return 'critical';
+  if (data.newEntryCount >= 3 || leadEntryCount >= 60) return 'high';
+  if (data.newEntryCount >= 1 || leadEntryCount >= 25) return 'medium';
   return 'low';
 }
 
@@ -236,6 +261,54 @@ export function createCascadeAlert(cascade: CascadeResult): UnifiedAlert | null 
   };
 
   return addAndMergeAlert(alert);
+}
+
+function createSanctionsAlert(): UnifiedAlert | null {
+  const pressure = getLatestSanctionsPressure();
+  if (!pressure || pressure.totalCount === 0) {
+    for (let i = alerts.length - 1; i >= 0; i--) {
+      if (alerts[i]?.type === 'sanctions') alerts.splice(i, 1);
+    }
+    return null;
+  }
+
+  const leadCountry = [...pressure.countries]
+    .sort((a, b) => b.newEntryCount - a.newEntryCount || b.entryCount - a.entryCount)[0];
+  if (!leadCountry) return null;
+  if (pressure.newEntryCount === 0 && leadCountry.entryCount < 25) return null;
+
+  const leadProgram = [...pressure.programs]
+    .sort((a, b) => b.newEntryCount - a.newEntryCount || b.entryCount - a.entryCount)[0];
+
+  const sanctions: SanctionsAlert = {
+    countryCode: leadCountry.countryCode,
+    countryName: leadCountry.countryName,
+    entryCount: leadCountry.entryCount,
+    newEntryCount: leadCountry.newEntryCount,
+    topProgram: leadProgram?.program || 'Unspecified',
+    topProgramCount: leadProgram?.entryCount || 0,
+    vesselCount: leadCountry.vesselCount,
+    aircraftCount: leadCountry.aircraftCount,
+    totalCount: pressure.totalCount,
+    datasetDate: pressure.datasetDate?.getTime() ?? null,
+  };
+
+  const summary = pressure.newEntryCount > 0
+    ? `${pressure.newEntryCount} new OFAC designation${pressure.newEntryCount === 1 ? '' : 's'} detected. Pressure is highest around ${leadCountry.countryName} (${leadCountry.entryCount}), with ${leadProgram?.program || 'unspecified'} leading program activity.`
+    : `${leadCountry.countryName} has ${leadCountry.entryCount} OFAC-linked designations in the current dataset, led by ${leadProgram?.program || 'unspecified'} activity.`;
+
+  return addAndMergeAlert({
+    id: 'sanctions-pressure',
+    type: 'sanctions',
+    priority: getPriorityFromSanctions(pressure),
+    title: pressure.newEntryCount > 0
+      ? `Sanctions pressure rising around ${leadCountry.countryName}`
+      : `Persistent sanctions pressure around ${leadCountry.countryName}`,
+    summary,
+    components: { sanctions },
+    countries: [leadCountry.countryCode],
+    timestamp: pressure.fetchedAt,
+  });
 }
 
 function getRadiationRank(observation: RadiationObservation): number {
@@ -367,13 +440,23 @@ function generateCompositeTitle(a: UnifiedAlert, b: UnifiedAlert): string {
   }
 
   if (a.components.convergence || b.components.convergence) {
-    const countryCode = a.countries[0] || b.countries[0];
+    if (a.components.sanctions || b.components.sanctions) {
+    const sanctions = a.components.sanctions || b.components.sanctions;
+    if (sanctions) return `Sanctions pressure: ${sanctions.countryName}`;
+  }
+
+  const countryCode = a.countries[0] || b.countries[0];
     const location = countryCode ? getCountryDisplayName(countryCode) : t('alerts.multipleRegions');
     return t('alerts.geoAlert', { location });
   }
 
   if (a.components.cascade || b.components.cascade) {
     return t('alerts.cascadeAlert');
+  }
+
+  if (a.components.sanctions || b.components.sanctions) {
+    const sanctions = a.components.sanctions || b.components.sanctions;
+    if (sanctions) return `Sanctions pressure: ${sanctions.countryName}`;
   }
 
   const countryCode = a.countries[0] || b.countries[0];
@@ -528,6 +611,7 @@ function updateAlerts(convergenceAlerts: GeoConvergenceAlert[]): void {
 
   // Check for CII changes (alerts are added internally via addAndMergeAlert)
   checkCIIChanges();
+  createSanctionsAlert();
   createRadiationAlert();
 
   // Sort by timestamp (newest first) and limit to 100
@@ -549,6 +633,18 @@ export function calculateStrategicRiskOverview(
   updateAlerts(convergenceAlerts);
 
   const ciiRiskScore = calculateCIIRiskScore(ciiScores);
+  const sanctionsPressure = getLatestSanctionsPressure();
+
+  const sanctionsScore = sanctionsPressure
+    ? Math.min(
+        10,
+        sanctionsPressure.newEntryCount * 2 +
+        Math.min(4, (sanctionsPressure.countries[0]?.entryCount ?? 0) / 20) +
+        sanctionsPressure.vesselCount * 0.3 +
+        sanctionsPressure.aircraftCount * 0.3
+      )
+    : 0;
+
   const radiationWatch = getLatestRadiationWatch();
   const radiationScore = radiationWatch
     ? Math.min(
@@ -590,6 +686,7 @@ export function calculateStrategicRiskOverview(
     infraScore * infraWeight +
     theaterBoost +
     breakingBoost +
+    sanctionsScore +
     radiationScore
   ));
 
@@ -605,7 +702,7 @@ export function calculateStrategicRiskOverview(
     infrastructureIncidents: countInfrastructureIncidents(),
     compositeScore: composite,
     trend,
-    topRisks: identifyTopRisks(convergenceAlerts, ciiScores, radiationWatch?.observations ?? []),
+    topRisks: identifyTopRisks(convergenceAlerts, ciiScores, sanctionsPressure, radiationWatch?.observations ?? []),
     topConvergenceZones: convergenceAlerts
       .slice(0, 3)
       .map(a => ({ cellId: a.cellId, lat: a.lat, lon: a.lon, score: a.score })),
@@ -662,6 +759,7 @@ function countInfrastructureIncidents(): number {
 function identifyTopRisks(
   convergence: GeoConvergenceAlert[],
   cii: CountryScore[],
+  sanctions: SanctionsPressureResult | null,
   radiation: RadiationObservation[]
 ): string[] {
   const risks: string[] = [];
@@ -670,6 +768,12 @@ function identifyTopRisks(
   if (top) {
     const location = getLocationName(top.lat, top.lon);
     risks.push(`Convergence: ${location} (score: ${top.score})`);
+  }
+
+  const leadSanctions = sanctions?.countries[0];
+  if (leadSanctions && (sanctions.newEntryCount > 0 || leadSanctions.entryCount >= 25)) {
+    const label = sanctions.newEntryCount > 0 ? 'Sanctions burst' : 'Sanctions pressure';
+    risks.push(`${label}: ${leadSanctions.countryName} (${leadSanctions.entryCount}, +${leadSanctions.newEntryCount} new)`);
   }
 
   const strongestRadiation = radiation

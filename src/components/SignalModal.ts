@@ -135,6 +135,7 @@ export class SignalModal {
       cii_spike: '📊',
       convergence: '🌍',
       cascade: '⚡',
+      sanctions: '🚫',
       radiation: '☢️',
       composite: '🔗',
     };
@@ -202,6 +203,33 @@ export class SignalModal {
         <div class="signal-context-item">
           <span class="context-label">${t('modals.signal.impactLevel')}</span>
           <span class="context-value">${escapeHtml(cascade.highestImpact)}</span>
+        </div>
+      `;
+    }
+
+
+    if (alert.components.sanctions) {
+      const sanctions = alert.components.sanctions;
+      detailsHtml += `
+        <div class="signal-context-item">
+          <span class="context-label">Country</span>
+          <span class="context-value">${escapeHtml(sanctions.countryName)} (${escapeHtml(sanctions.countryCode)})</span>
+        </div>
+        <div class="signal-context-item">
+          <span class="context-label">Pressure</span>
+          <span class="context-value">${sanctions.entryCount} designations${sanctions.newEntryCount > 0 ? ` · +${sanctions.newEntryCount} new` : ''}</span>
+        </div>
+        <div class="signal-context-item">
+          <span class="context-label">Top program</span>
+          <span class="context-value">${escapeHtml(sanctions.topProgram)} (${sanctions.topProgramCount})</span>
+        </div>
+        <div class="signal-context-item">
+          <span class="context-label">Vessels / aircraft</span>
+          <span class="context-value">${sanctions.vesselCount} / ${sanctions.aircraftCount}</span>
+        </div>
+        <div class="signal-context-item">
+          <span class="context-label">Dataset size</span>
+          <span class="context-value">${sanctions.totalCount}${sanctions.datasetDate ? ` · ${new Date(sanctions.datasetDate).toISOString().slice(0, 10)}` : ''}</span>
         </div>
       `;
     }

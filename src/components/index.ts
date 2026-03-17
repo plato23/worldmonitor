@@ -47,6 +47,7 @@ export * from './UnifiedSettings';
 export * from './TradePolicyPanel';
 export * from './SupplyChainPanel';
 export * from './SecurityAdvisoriesPanel';
+export * from './SanctionsPressurePanel';
 export * from './RadiationWatchPanel';
 export * from './OrefSirensPanel';
 export * from './TelegramIntelPanel';

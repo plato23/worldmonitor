@@ -22,6 +22,7 @@ const SIGNAL_TYPE_LABELS: Record<SignalType, string> = {
   satellite_fire: 'satellite fires',
   radiation_anomaly: 'radiation anomalies',
   temporal_anomaly: 'anomaly detection',
+  sanctions_pressure: 'sanctions pressure',
   active_strike: 'active strikes',
 };
 
@@ -34,6 +35,7 @@ const SIGNAL_TYPE_ICONS: Record<SignalType, string> = {
   satellite_fire: '🔥',
   radiation_anomaly: '☢️',
   temporal_anomaly: '📊',
+  sanctions_pressure: '🚫',
   active_strike: '💥',
 };
 
@@ -291,6 +293,7 @@ class FocalPointDetector {
              (signals.signalTypes.has('military_vessel') && /navy|naval|ships|fleet|carrier/.test(lower)) ||
              (signals.signalTypes.has('protest') && /protest|demonstrat|unrest|riot/.test(lower)) ||
              (signals.signalTypes.has('internet_outage') && /internet|blackout|outage|connectivity/.test(lower)) ||
+             (signals.signalTypes.has('sanctions_pressure') && /sanction|designation|ofac|treasury|embargo|blacklist/.test(lower)) ||
              (signals.signalTypes.has('radiation_anomaly') && /nuclear|radiation|reactor|contamination|radnet/.test(lower)) ||
              (signals.signalTypes.has('active_strike') && /strike|attack|bomb|missile|target|hit/.test(lower));
     })) {

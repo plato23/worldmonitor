@@ -48,6 +48,7 @@ export const BOOTSTRAP_CACHE_KEYS: Record<string, string> = {
   securityAdvisories: 'intelligence:advisories-bootstrap:v1',
   forecasts:          'forecast:predictions:v2',
   customsRevenue:     'trade:customs-revenue:v1',
+  sanctionsPressure: 'sanctions:pressure:v1',
 };
 
 export const BOOTSTRAP_TIERS: Record<string, 'slow' | 'fast'> = {
@@ -55,7 +56,7 @@ export const BOOTSTRAP_TIERS: Record<string, 'slow' | 'fast'> = {
   minerals: 'slow', giving: 'slow', sectors: 'slow',
   progressData: 'slow', renewableEnergy: 'slow',
   etfFlows: 'slow', shippingRates: 'fast', wildfires: 'slow',
-  climateAnomalies: 'slow', radiationWatch: 'slow', cyberThreats: 'slow', techReadiness: 'slow',
+  climateAnomalies: 'slow', sanctionsPressure: 'slow', radiationWatch: 'slow', cyberThreats: 'slow', techReadiness: 'slow',
   theaterPosture: 'fast', naturalEvents: 'slow',
   cryptoQuotes: 'slow', gulfQuotes: 'slow', stablecoinMarkets: 'slow',
   unrestEvents: 'slow', ucdpEvents: 'slow', techEvents: 'slow',

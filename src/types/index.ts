@@ -30,6 +30,7 @@ export type DataSourceId =
   | 'supply_chain'
   | 'security_advisories'
   | 'gpsjam'
+  | 'sanctions_pressure'
   | 'radiation'
   | 'treasury_revenue';
 
