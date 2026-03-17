@@ -2180,11 +2180,18 @@ export class DeckGLMap {
       id: 'radiation-watch-layer',
       data: this.radiationObservations,
       getPosition: (d) => [d.lon, d.lat],
-      getRadius: (d) => d.severity === 'spike' ? 26000 : 18000,
+      getRadius: (d) => {
+        const base = d.severity === 'spike' ? 26000 : 18000;
+        if (d.corroborated) return base * 1.15;
+        if (d.confidence === 'low') return base * 0.85;
+        return base;
+      },
       getFillColor: (d) => (
         d.severity === 'spike'
           ? [255, 48, 48, 220]
-          : [255, 174, 0, 200]
+          : d.confidence === 'low'
+            ? [255, 174, 0, 150]
+            : [255, 174, 0, 200]
       ) as [number, number, number, number],
       getLineColor: [255, 255, 255, 200],
       stroked: true,
@@ -3394,7 +3401,9 @@ export class DeckGLMap {
       case 'radiation-watch-layer': {
         const severityLabel = obj.severity === 'spike' ? 'Radiation spike' : 'Elevated radiation';
         const delta = Number(obj.delta || 0);
-        return { html: `<div class="deckgl-tooltip"><strong>${severityLabel}</strong><br/>${text(obj.location)}<br/>${Number(obj.value).toFixed(1)} ${text(obj.unit)} · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs baseline</div>` };
+        const confidence = String(obj.confidence || 'low').toUpperCase();
+        const corroboration = obj.corroborated ? 'CONFIRMED' : obj.conflictingSources ? 'CONFLICTING' : confidence;
+        return { html: `<div class="deckgl-tooltip"><strong>${severityLabel}</strong><br/>${text(obj.location)}<br/>${Number(obj.value).toFixed(1)} ${text(obj.unit)} · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} vs baseline<br/>${text(corroboration)}</div>` };
       }
       case 'spaceports-layer':
         return { html: `<div class="deckgl-tooltip"><strong>${text(obj.name)}</strong><br/>${text(obj.country || t('components.deckgl.layers.spaceports'))}</div>` };

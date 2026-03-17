@@ -237,11 +237,21 @@ interface RadiationMarker extends BaseMarker {
   id: string;
   location: string;
   country: string;
+  source: RadiationObservation['source'];
+  contributingSources: RadiationObservation['contributingSources'];
   value: number;
   unit: string;
+  observedAt: Date;
+  freshness: RadiationObservation['freshness'];
+  baselineValue: number;
   delta: number;
   zScore: number;
   severity: 'normal' | 'elevated' | 'spike';
+  confidence: RadiationObservation['confidence'];
+  corroborated: boolean;
+  conflictingSources: boolean;
+  convertedFromCpm: boolean;
+  sourceCount: number;
 }
 interface EconomicMarker extends BaseMarker {
   _kind: 'economic';
@@ -989,10 +999,13 @@ export class GlobeMap {
       const ring = d.severity === 'spike'
         ? `<div style="position:absolute;inset:-5px;border-radius:50%;border:2px solid ${c}66;${this.pulseStyle('1.8s')}"></div>`
         : '';
+      const confirmRing = d.corroborated
+        ? '<div style="position:absolute;inset:-9px;border-radius:50%;border:1px dashed #7dd3fc88;"></div>'
+        : '';
       el.innerHTML = GlobeMap.wrapHit(
-        `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;">${ring}<div style="font-size:11px;color:${c};text-shadow:0 0 5px ${c}88;">☢</div></div>`
+        `<div style="position:relative;display:inline-flex;align-items:center;justify-content:center;">${ring}${confirmRing}<div style="font-size:11px;color:${c};text-shadow:0 0 5px ${c}88;opacity:${d.confidence === 'low' ? 0.75 : 1};">☢</div></div>`
       );
-      el.title = `${d.location} · ${d.severity}`;
+      el.title = `${d.location} · ${d.severity} · ${d.confidence}`;
     } else if (d._kind === 'natural') {
       const typeIcons: Record<string, string> = {
         earthquakes: '〽', volcanoes: '🌋', severeStorms: '🌀',
@@ -1232,19 +1245,25 @@ export class GlobeMap {
         type: 'radiation',
         data: {
           id: d.id,
-          source: 'EPA RadNet',
+          source: d.source,
+          contributingSources: d.contributingSources,
           location: d.location,
           country: d.country,
           lat: d._lat,
           lon: d._lng,
           value: d.value,
           unit: d.unit,
-          observedAt: new Date(),
-          freshness: 'recent',
-          baselineValue: d.value - d.delta,
+          observedAt: d.observedAt,
+          freshness: d.freshness,
+          baselineValue: d.baselineValue,
           delta: d.delta,
           zScore: d.zScore,
           severity: d.severity,
+          confidence: d.confidence,
+          corroborated: d.corroborated,
+          conflictingSources: d.conflictingSources,
+          convertedFromCpm: d.convertedFromCpm,
+          sourceCount: d.sourceCount,
         },
         x,
         y,
@@ -1333,7 +1352,8 @@ export class GlobeMap {
       const rc = d.severity === 'spike' ? '#ff3030' : '#ffaa00';
       html = `<span style="color:${rc};font-weight:bold;">☢ ${esc(d.severity.toUpperCase())}</span>` +
              `<br><span style="opacity:.7;">${esc(d.location)}, ${esc(d.country)}</span>` +
-             `<br><span style="opacity:.5;">${d.value.toFixed(1)} ${esc(d.unit)} · ${d.delta >= 0 ? '+' : ''}${d.delta.toFixed(1)} vs baseline</span>`;
+             `<br><span style="opacity:.5;">${d.value.toFixed(1)} ${esc(d.unit)} · ${d.delta >= 0 ? '+' : ''}${d.delta.toFixed(1)} vs baseline</span>` +
+             `<br><span style="opacity:.55;font-size:10px;">${esc(d.confidence.toUpperCase())}${d.corroborated ? ' · CONFIRMED' : ''}${d.conflictingSources ? ' · CONFLICT' : ''}</span>`;
     } else if (d._kind === 'natural') {
       html = `<span style="font-weight:bold;">${esc(d.title.slice(0, 60))}</span>` +
              `<br><span style="opacity:.7;">${esc(d.category)}</span>`;
@@ -2631,11 +2651,21 @@ export class GlobeMap {
       id: observation.id,
       location: observation.location,
       country: observation.country,
+      source: observation.source,
+      contributingSources: observation.contributingSources,
       value: observation.value,
       unit: observation.unit,
+      observedAt: observation.observedAt,
+      freshness: observation.freshness,
+      baselineValue: observation.baselineValue,
       delta: observation.delta,
       zScore: observation.zScore,
       severity: observation.severity,
+      confidence: observation.confidence,
+      corroborated: observation.corroborated,
+      conflictingSources: observation.conflictingSources,
+      convertedFromCpm: observation.convertedFromCpm,
+      sourceCount: observation.sourceCount,
     }));
     this.flushMarkers();
   }

@@ -226,8 +226,16 @@ export class SignalModal {
           <span class="context-value">+${radiation.delta.toFixed(1)} / ${radiation.zScore.toFixed(2)}</span>
         </div>
         <div class="signal-context-item">
+          <span class="context-label">Confidence</span>
+          <span class="context-value">${escapeHtml(radiation.confidence)}${radiation.corroborated ? ' · confirmed' : ''}${radiation.conflictingSources ? ' · conflicting' : ''}</span>
+        </div>
+        <div class="signal-context-item">
+          <span class="context-label">Sources</span>
+          <span class="context-value">${escapeHtml(radiation.contributingSources.join(' + '))} (${radiation.sourceCount})</span>
+        </div>
+        <div class="signal-context-item">
           <span class="context-label">Anomalies in batch</span>
-          <span class="context-value">${radiation.anomalyCount} total (${radiation.spikeCount} spike, ${radiation.elevatedCount} elevated)</span>
+          <span class="context-value">${radiation.anomalyCount} total (${radiation.spikeCount} spike, ${radiation.elevatedCount} elevated, ${radiation.corroboratedCount} confirmed)</span>
         </div>
       `;
     }

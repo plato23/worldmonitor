@@ -55,9 +55,18 @@ export interface RadiationAlert {
   delta: number;
   zScore: number;
   severity: 'elevated' | 'spike';
+  confidence: RadiationObservation['confidence'];
+  corroborated: boolean;
+  conflictingSources: boolean;
+  convertedFromCpm: boolean;
+  sourceCount: number;
+  contributingSources: RadiationObservation['contributingSources'];
   anomalyCount: number;
   elevatedCount: number;
   spikeCount: number;
+  corroboratedCount: number;
+  lowConfidenceCount: number;
+  conflictingCount: number;
 }
 
 export interface StrategicRiskOverview {
@@ -126,9 +135,19 @@ function getPriorityFromConvergence(score: number, typeCount: number): AlertPrio
 }
 
 function getPriorityFromRadiation(observation: RadiationObservation, spikeCount: number): AlertPriority {
-  if (observation.severity === 'spike' || spikeCount > 1) return 'critical';
-  if (observation.zScore >= 2.5 || observation.delta >= 10) return 'high';
-  return 'medium';
+  let score = 0;
+  if (observation.severity === 'spike') score += 4;
+  else if (observation.severity === 'elevated') score += 2;
+  if (observation.corroborated) score += 2;
+  if (observation.confidence === 'high') score += 2;
+  else if (observation.confidence === 'medium') score += 1;
+  if (observation.conflictingSources) score -= 2;
+  if (observation.convertedFromCpm) score -= 1;
+  if (spikeCount > 1 && observation.corroborated) score += 1;
+  if (score >= 7) return 'critical';
+  if (score >= 4) return 'high';
+  if (score >= 2) return 'medium';
+  return 'low';
 }
 
 function buildConvergenceAlert(convergence: GeoConvergenceAlert, alertId: string): UnifiedAlert {
@@ -221,7 +240,10 @@ export function createCascadeAlert(cascade: CascadeResult): UnifiedAlert | null 
 
 function getRadiationRank(observation: RadiationObservation): number {
   const severityRank = observation.severity === 'spike' ? 2 : observation.severity === 'elevated' ? 1 : 0;
-  return severityRank * 1000 + observation.zScore * 100 + observation.delta;
+  const confidenceRank = observation.confidence === 'high' ? 2 : observation.confidence === 'medium' ? 1 : 0;
+  const corroborationBonus = observation.corroborated ? 300 : 0;
+  const conflictPenalty = observation.conflictingSources ? 250 : 0;
+  return severityRank * 1000 + confidenceRank * 200 + corroborationBonus + observation.zScore * 100 + observation.delta - conflictPenalty;
 }
 
 function createRadiationAlert(): UnifiedAlert | null {
@@ -250,17 +272,38 @@ function createRadiationAlert(): UnifiedAlert | null {
     delta: strongest.delta,
     zScore: strongest.zScore,
     severity: strongest.severity === 'spike' ? 'spike' : 'elevated',
+    confidence: strongest.confidence,
+    corroborated: strongest.corroborated,
+    conflictingSources: strongest.conflictingSources,
+    convertedFromCpm: strongest.convertedFromCpm,
+    sourceCount: strongest.sourceCount,
+    contributingSources: strongest.contributingSources,
     anomalyCount: watch.summary.anomalyCount,
     elevatedCount: watch.summary.elevatedCount,
     spikeCount: watch.summary.spikeCount,
+    corroboratedCount: watch.summary.corroboratedCount,
+    lowConfidenceCount: watch.summary.lowConfidenceCount,
+    conflictingCount: watch.summary.conflictingCount,
   };
 
+  const qualifier = strongest.corroborated
+    ? 'Confirmed'
+    : strongest.conflictingSources
+      ? 'Conflicting'
+      : strongest.confidence === 'low'
+        ? 'Potential'
+        : 'Elevated';
   const title = strongest.severity === 'spike'
-    ? `Radiation spike detected at ${strongest.location}`
-    : `Elevated radiation detected at ${strongest.location}`;
+    ? `${qualifier} radiation spike at ${strongest.location}`
+    : `${qualifier} radiation anomaly at ${strongest.location}`;
+  const confidenceClause = strongest.corroborated
+    ? `Confirmed by ${strongest.contributingSources.join(' + ')}.`
+    : strongest.conflictingSources
+      ? `Sources disagree across ${strongest.contributingSources.join(' + ')}.`
+      : `Confidence is ${strongest.confidence}.`;
   const summary = watch.summary.spikeCount > 0
-    ? `${watch.summary.spikeCount} spike and ${watch.summary.elevatedCount} elevated reading${watch.summary.anomalyCount === 1 ? '' : 's'} detected. Highest site is ${strongest.location} (${strongest.value.toFixed(1)} ${strongest.unit}, +${strongest.delta.toFixed(1)} vs baseline).`
-    : `${watch.summary.elevatedCount} elevated radiation reading${watch.summary.elevatedCount === 1 ? '' : 's'} detected. Highest site is ${strongest.location} (${strongest.value.toFixed(1)} ${strongest.unit}, +${strongest.delta.toFixed(1)} vs baseline).`;
+    ? `${watch.summary.spikeCount} spike and ${watch.summary.elevatedCount} elevated reading${watch.summary.anomalyCount === 1 ? '' : 's'} detected, with ${watch.summary.corroboratedCount} confirmed anomaly${watch.summary.corroboratedCount === 1 ? '' : 'ies'}. Highest site is ${strongest.location} (${strongest.value.toFixed(1)} ${strongest.unit}, +${strongest.delta.toFixed(1)} vs baseline). ${confidenceClause}`
+    : `${watch.summary.elevatedCount} elevated radiation reading${watch.summary.elevatedCount === 1 ? '' : 's'} detected, with ${watch.summary.corroboratedCount} confirmed anomaly${watch.summary.corroboratedCount === 1 ? '' : 'ies'}. Highest site is ${strongest.location} (${strongest.value.toFixed(1)} ${strongest.unit}, +${strongest.delta.toFixed(1)} vs baseline). ${confidenceClause}`;
 
   return addAndMergeAlert({
     id: 'radiation-watch',
@@ -508,7 +551,14 @@ export function calculateStrategicRiskOverview(
   const ciiRiskScore = calculateCIIRiskScore(ciiScores);
   const radiationWatch = getLatestRadiationWatch();
   const radiationScore = radiationWatch
-    ? Math.min(12, radiationWatch.summary.spikeCount * 8 + radiationWatch.summary.elevatedCount * 3)
+    ? Math.min(
+        12,
+        radiationWatch.summary.spikeCount * 4 +
+        radiationWatch.summary.elevatedCount * 2 +
+        radiationWatch.summary.corroboratedCount * 3 -
+        radiationWatch.summary.lowConfidenceCount -
+        radiationWatch.summary.conflictingCount
+      )
     : 0;
 
   // Weights for composite score
@@ -626,7 +676,13 @@ function identifyTopRisks(
     .filter(observation => observation.severity !== 'normal')
     .sort((a, b) => getRadiationRank(b) - getRadiationRank(a))[0];
   if (strongestRadiation) {
-    const status = strongestRadiation.severity === 'spike' ? 'Radiation spike' : 'Elevated radiation';
+    const status = strongestRadiation.corroborated
+      ? strongestRadiation.severity === 'spike' ? 'Confirmed radiation spike' : 'Confirmed radiation anomaly'
+      : strongestRadiation.conflictingSources
+        ? 'Conflicting radiation signal'
+        : strongestRadiation.severity === 'spike'
+          ? 'Potential radiation spike'
+          : 'Elevated radiation';
     risks.push(`${status}: ${strongestRadiation.location} (+${strongestRadiation.delta.toFixed(1)} ${strongestRadiation.unit})`);
   }
 

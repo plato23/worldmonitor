@@ -484,6 +484,13 @@ export class MapPopup {
   private renderRadiationPopup(observation: RadiationObservation): string {
     const severityClass = observation.severity === 'spike' ? 'high' : 'medium';
     const delta = `${observation.delta >= 0 ? '+' : ''}${observation.delta.toFixed(1)} ${escapeHtml(observation.unit)}`;
+    const provenance = formatRadiationSources(observation);
+    const confidence = formatRadiationConfidence(observation.confidence);
+    const flags = [
+      observation.corroborated ? 'Confirmed' : '',
+      observation.conflictingSources ? 'Conflicting sources' : '',
+      observation.convertedFromCpm ? 'CPM-derived component' : '',
+    ].filter(Boolean).join(' · ');
     return `
       <div class="popup-header outage">
         <span class="popup-title">☢ ${escapeHtml(observation.location.toUpperCase())}</span>
@@ -505,11 +512,19 @@ export class MapPopup {
             <span class="stat-value">${delta}</span>
           </div>
           <div class="popup-stat">
-            <span class="stat-label">Source</span>
-            <span class="stat-value">${escapeHtml(observation.source)}</span>
+            <span class="stat-label">Confidence</span>
+            <span class="stat-value">${escapeHtml(confidence)}</span>
+          </div>
+          <div class="popup-stat">
+            <span class="stat-label">Sources</span>
+            <span class="stat-value">${escapeHtml(provenance)}</span>
+          </div>
+          <div class="popup-stat">
+            <span class="stat-label">Source count</span>
+            <span class="stat-value">${observation.sourceCount}</span>
           </div>
         </div>
-        <p class="popup-description">${escapeHtml(observation.country)} · z-score ${observation.zScore.toFixed(2)} · ${escapeHtml(observation.freshness)}</p>
+        <p class="popup-description">${escapeHtml(observation.country)} · z-score ${observation.zScore.toFixed(2)} · ${escapeHtml(observation.freshness)}${flags ? ` · ${escapeHtml(flags)}` : ''}</p>
       </div>
     `;
   }
@@ -2960,5 +2975,21 @@ export class MapPopup {
         </div>
       </div>
     `;
+  }
+}
+
+function formatRadiationSources(observation: RadiationObservation): string {
+  const uniqueSources = [...new Set(observation.contributingSources)];
+  return uniqueSources.length > 0 ? uniqueSources.join(' + ') : observation.source;
+}
+
+function formatRadiationConfidence(confidence: RadiationObservation['confidence']): string {
+  switch (confidence) {
+    case 'high':
+      return 'High';
+    case 'medium':
+      return 'Medium';
+    default:
+      return 'Low';
   }
 }

@@ -109,6 +109,22 @@ components:
                     type: integer
                     format: int32
                     description: Observations classified as spike-level anomalies.
+                corroboratedCount:
+                    type: integer
+                    format: int32
+                    description: Observations corroborated by more than one source.
+                lowConfidenceCount:
+                    type: integer
+                    format: int32
+                    description: Observations that remain low-confidence after synthesis.
+                conflictingCount:
+                    type: integer
+                    format: int32
+                    description: Observations where contributing sources materially disagree.
+                convertedFromCpmCount:
+                    type: integer
+                    format: int32
+                    description: Observations whose normalized value was derived from CPM.
             description: ListRadiationObservationsResponse contains normalized readings plus coverage metadata.
         RadiationObservation:
             type: object
@@ -172,6 +188,36 @@ components:
                         - RADIATION_SEVERITY_ELEVATED
                         - RADIATION_SEVERITY_SPIKE
                     description: RadiationSeverity classifies whether a reading is behaving normally.
+                contributingSources:
+                    type: array
+                    items:
+                        type: string
+                        enum:
+                            - RADIATION_SOURCE_UNSPECIFIED
+                            - RADIATION_SOURCE_EPA_RADNET
+                            - RADIATION_SOURCE_SAFECAST
+                        description: RadiationSource identifies the upstream measurement network.
+                confidence:
+                    type: string
+                    enum:
+                        - RADIATION_CONFIDENCE_UNSPECIFIED
+                        - RADIATION_CONFIDENCE_LOW
+                        - RADIATION_CONFIDENCE_MEDIUM
+                        - RADIATION_CONFIDENCE_HIGH
+                    description: RadiationConfidence represents how strongly the reading is supported.
+                corroborated:
+                    type: boolean
+                    description: Whether a second source corroborated the observed pattern.
+                conflictingSources:
+                    type: boolean
+                    description: Whether contributing sources materially disagree.
+                convertedFromCpm:
+                    type: boolean
+                    description: True when the value was converted from CPM using a generic fallback.
+                sourceCount:
+                    type: integer
+                    format: int32
+                    description: Number of distinct contributing sources.
             required:
                 - id
             description: RadiationObservation represents a normalized ambient dose-rate reading.

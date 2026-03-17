@@ -3,6 +3,7 @@ import { getRpcBaseUrl } from '@/services/rpc-client';
 import { getHydratedData } from '@/services/bootstrap';
 import {
   RadiationServiceClient,
+  type RadiationConfidence as ProtoRadiationConfidence,
   type RadiationFreshness as ProtoRadiationFreshness,
   type RadiationObservation as ProtoRadiationObservation,
   type RadiationSeverity as ProtoRadiationSeverity,
@@ -12,10 +13,13 @@ import {
 
 export type RadiationFreshness = 'live' | 'recent' | 'historical';
 export type RadiationSeverity = 'normal' | 'elevated' | 'spike';
+export type RadiationConfidence = 'low' | 'medium' | 'high';
+export type RadiationSourceLabel = 'EPA RadNet' | 'Safecast';
 
 export interface RadiationObservation {
   id: string;
-  source: 'EPA RadNet' | 'Safecast';
+  source: RadiationSourceLabel;
+  contributingSources: RadiationSourceLabel[];
   location: string;
   country: string;
   lat: number;
@@ -28,6 +32,11 @@ export interface RadiationObservation {
   delta: number;
   zScore: number;
   severity: RadiationSeverity;
+  confidence: RadiationConfidence;
+  corroborated: boolean;
+  conflictingSources: boolean;
+  convertedFromCpm: boolean;
+  sourceCount: number;
 }
 
 export interface RadiationWatchResult {
@@ -38,6 +47,10 @@ export interface RadiationWatchResult {
     anomalyCount: number;
     elevatedCount: number;
     spikeCount: number;
+    corroboratedCount: number;
+    lowConfidenceCount: number;
+    conflictingCount: number;
+    convertedFromCpmCount: number;
   };
 }
 
@@ -54,13 +67,22 @@ const emptyResult: RadiationWatchResult = {
   fetchedAt: new Date(0),
   observations: [],
   coverage: { epa: 0, safecast: 0 },
-  summary: { anomalyCount: 0, elevatedCount: 0, spikeCount: 0 },
+  summary: {
+    anomalyCount: 0,
+    elevatedCount: 0,
+    spikeCount: 0,
+    corroboratedCount: 0,
+    lowConfidenceCount: 0,
+    conflictingCount: 0,
+    convertedFromCpmCount: 0,
+  },
 };
 
 function toObservation(raw: ProtoRadiationObservation): RadiationObservation {
   return {
     id: raw.id,
     source: mapSource(raw.source),
+    contributingSources: (raw.contributingSources ?? []).map(mapSource),
     location: raw.locationName,
     country: raw.country,
     lat: raw.location?.latitude ?? 0,
@@ -73,6 +95,11 @@ function toObservation(raw: ProtoRadiationObservation): RadiationObservation {
     delta: raw.delta ?? 0,
     zScore: raw.zScore ?? 0,
     severity: mapSeverity(raw.severity),
+    confidence: mapConfidence(raw.confidence),
+    corroborated: raw.corroborated ?? false,
+    conflictingSources: raw.conflictingSources ?? false,
+    convertedFromCpm: raw.convertedFromCpm ?? false,
+    sourceCount: raw.sourceCount ?? Math.max(1, raw.contributingSources?.length ?? 1),
   };
 }
 
@@ -112,11 +139,15 @@ function toResult(response: ListRadiationObservationsResponse): RadiationWatchRe
       anomalyCount: response.anomalyCount ?? 0,
       elevatedCount: response.elevatedCount ?? 0,
       spikeCount: response.spikeCount ?? 0,
+      corroboratedCount: response.corroboratedCount ?? 0,
+      lowConfidenceCount: response.lowConfidenceCount ?? 0,
+      conflictingCount: response.conflictingCount ?? 0,
+      convertedFromCpmCount: response.convertedFromCpmCount ?? 0,
     },
   };
 }
 
-function mapSource(source: ProtoRadiationSource): RadiationObservation['source'] {
+function mapSource(source: ProtoRadiationSource): RadiationSourceLabel {
   switch (source) {
     case 'RADIATION_SOURCE_EPA_RADNET':
       return 'EPA RadNet';
@@ -146,5 +177,16 @@ function mapSeverity(severity: ProtoRadiationSeverity): RadiationSeverity {
       return 'elevated';
     default:
       return 'normal';
+  }
+}
+
+function mapConfidence(confidence: ProtoRadiationConfidence): RadiationConfidence {
+  switch (confidence) {
+    case 'RADIATION_CONFIDENCE_HIGH':
+      return 'high';
+    case 'RADIATION_CONFIDENCE_MEDIUM':
+      return 'medium';
+    default:
+      return 'low';
   }
 }

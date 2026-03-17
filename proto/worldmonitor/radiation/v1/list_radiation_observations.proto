@@ -33,4 +33,16 @@ message ListRadiationObservationsResponse {
 
   // Observations classified as spike-level anomalies.
   int32 spike_count = 7;
+
+  // Observations corroborated by more than one source.
+  int32 corroborated_count = 8;
+
+  // Observations that remain low-confidence after synthesis.
+  int32 low_confidence_count = 9;
+
+  // Observations where contributing sources materially disagree.
+  int32 conflicting_count = 10;
+
+  // Observations whose normalized value was derived from CPM.
+  int32 converted_from_cpm_count = 11;
 }

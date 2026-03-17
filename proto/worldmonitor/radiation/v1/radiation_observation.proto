@@ -50,6 +50,24 @@ message RadiationObservation {
 
   // Interpreted anomaly severity for the current reading.
   RadiationSeverity severity = 13;
+
+  // Sources contributing to this synthesized observation.
+  repeated RadiationSource contributing_sources = 14;
+
+  // Confidence in the current synthesized observation.
+  RadiationConfidence confidence = 15;
+
+  // Whether a second source corroborated the observed pattern.
+  bool corroborated = 16;
+
+  // Whether contributing sources materially disagree.
+  bool conflicting_sources = 17;
+
+  // True when the value was converted from CPM using a generic fallback.
+  bool converted_from_cpm = 18;
+
+  // Number of distinct contributing sources.
+  int32 source_count = 19;
 }
 
 // RadiationSource identifies the upstream measurement network.
@@ -73,4 +91,12 @@ enum RadiationSeverity {
   RADIATION_SEVERITY_NORMAL = 1;
   RADIATION_SEVERITY_ELEVATED = 2;
   RADIATION_SEVERITY_SPIKE = 3;
+}
+
+// RadiationConfidence represents how strongly the reading is supported.
+enum RadiationConfidence {
+  RADIATION_CONFIDENCE_UNSPECIFIED = 0;
+  RADIATION_CONFIDENCE_LOW = 1;
+  RADIATION_CONFIDENCE_MEDIUM = 2;
+  RADIATION_CONFIDENCE_HIGH = 3;
 }
