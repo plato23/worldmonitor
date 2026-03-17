@@ -1044,7 +1044,10 @@ async function seedUcdpEvents() {
     const fetches = [];
     for (let offset = 0; offset < UCDP_MAX_PAGES && (newestPage - offset) >= 0; offset++) {
       const pg = newestPage - offset;
-      fetches.push(pg === 0 ? Promise.resolve(page0) : ucdpFetchPage(version, pg).catch(() => FAILED));
+      fetches.push(pg === 0 ? Promise.resolve(page0) : ucdpFetchPage(version, pg).catch((err) => {
+        console.warn(`[UCDP] page ${pg}: ${err.message || err}`);
+        return FAILED;
+      }));
     }
     const pageResults = await Promise.all(fetches);
 
@@ -1059,6 +1062,15 @@ async function seedUcdpEvents() {
         const ms = e?.date_start ? Date.parse(String(e.date_start)) : NaN;
         if (Number.isFinite(ms) && (!Number.isFinite(latestMs) || ms > latestMs)) latestMs = ms;
       }
+    }
+
+    // If no events from newest pages, extend existing cache TTL instead of overwriting
+    // with stale/empty data. This preserves the last known good payload.
+    if (allEvents.length === 0 && failedPages > 0) {
+      console.warn(`[UCDP] All ${failedPages} newest pages failed, extending existing key TTL (preserving last good data)`);
+      try { await upstashExpire(UCDP_REDIS_KEY, UCDP_TTL_SECONDS); } catch {}
+      // Do NOT update seed-meta: health should reflect actual data freshness, not this failed attempt
+      return;
     }
 
     const filtered = allEvents.filter((e) => {
@@ -1081,6 +1093,13 @@ async function seedUcdpEvents() {
       violenceType: UCDP_VIOLENCE_TYPE_MAP[e.type_of_violence] || 'UCDP_VIOLENCE_TYPE_UNSPECIFIED',
       sourceOriginal: (e.source_original || '').substring(0, 300),
     })).sort((a, b) => b.dateStart - a.dateStart).slice(0, UCDP_MAX_EVENTS);
+
+    // Partial success but 0 events after filtering: extend TTL, don't overwrite
+    if (mapped.length === 0) {
+      console.warn(`[UCDP] 0 events after filtering (failed pages: ${failedPages}), extending existing key TTL`);
+      try { await upstashExpire(UCDP_REDIS_KEY, UCDP_TTL_SECONDS); } catch {}
+      return;
+    }
 
     const payload = { events: mapped, fetchedAt: Date.now(), version, totalRaw: allEvents.length, filteredCount: mapped.length };
     const ok = await upstashSet(UCDP_REDIS_KEY, payload, UCDP_TTL_SECONDS);

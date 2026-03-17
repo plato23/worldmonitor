@@ -285,10 +285,27 @@ function buildWingbitsSourceMeta(flight) {
   return {
     source: 'wingbits',
     rawKeys: Object.keys(flight || {}),
-    operatorName: flight?.operator || flight?.o || '',
-    aircraftModel: flight?.aircraftModel || flight?.model || '',
-    aircraftTypeLabel: flight?.type || flight?.category || flight?.aircraftType || '',
-    registration: flight?.registration || flight?.reg || '',
+    rawPreview: {
+      operator: flight?.operator || '',
+      operatorName: flight?.operatorName || '',
+      airline: flight?.airline || '',
+      owner: flight?.owner || '',
+      type: flight?.type || '',
+      category: flight?.category || '',
+      aircraftType: flight?.aircraftType || '',
+      aircraftTypeCode: flight?.aircraftTypeCode || flight?.icaoType || flight?.aircraftCode || '',
+      description: flight?.description || flight?.aircraftDescription || '',
+      registration: flight?.registration || flight?.reg || flight?.tail || '',
+      originCountry: flight?.co || flight?.originCountry || '',
+    },
+    operatorName: flight?.operator || flight?.operatorName || flight?.airline || flight?.owner || flight?.o || '',
+    operatorCode: flight?.operatorCode || flight?.airlineCode || flight?.icaoOperator || flight?.iataOperator || '',
+    ownerName: flight?.owner || flight?.ownerName || '',
+    aircraftModel: flight?.aircraftModel || flight?.model || flight?.aircraftDescription || '',
+    aircraftTypeLabel: flight?.type || flight?.category || flight?.aircraftType || flight?.aircraftCategory || flight?.description || '',
+    aircraftTypeCode: flight?.aircraftTypeCode || flight?.icaoType || flight?.aircraftCode || '',
+    aircraftDescription: flight?.aircraftDescription || flight?.description || '',
+    registration: flight?.registration || flight?.reg || flight?.tail || '',
     originCountry: flight?.co || flight?.originCountry || '',
   };
 }
@@ -296,8 +313,12 @@ function buildWingbitsSourceMeta(flight) {
 function getSourceHintText(sourceMeta = {}) {
   return [
     sourceMeta.operatorName,
+    sourceMeta.operatorCode,
+    sourceMeta.ownerName,
     sourceMeta.aircraftModel,
     sourceMeta.aircraftTypeLabel,
+    sourceMeta.aircraftTypeCode,
+    sourceMeta.aircraftDescription,
     sourceMeta.registration,
   ]
     .filter(Boolean)
@@ -305,12 +326,111 @@ function getSourceHintText(sourceMeta = {}) {
     .toUpperCase();
 }
 
+function summarizeSourceMeta(sourceMeta = {}) {
+  return {
+    source: sourceMeta.source || '',
+    operatorName: sourceMeta.operatorName || '',
+    operatorCode: sourceMeta.operatorCode || '',
+    ownerName: sourceMeta.ownerName || '',
+    aircraftModel: sourceMeta.aircraftModel || '',
+    aircraftTypeLabel: sourceMeta.aircraftTypeLabel || '',
+    aircraftTypeCode: sourceMeta.aircraftTypeCode || '',
+    aircraftDescription: sourceMeta.aircraftDescription || '',
+    registration: sourceMeta.registration || '',
+    originCountry: sourceMeta.originCountry || '',
+  };
+}
+
+function summarizeRawSourcePreview(sourceMeta = {}) {
+  const preview = sourceMeta.rawPreview || {};
+  return Object.fromEntries(
+    Object.entries(preview).filter(([, value]) => Boolean(value)),
+  );
+}
+
+const SOURCE_META_FIELDS = [
+  'operatorName',
+  'operatorCode',
+  'ownerName',
+  'aircraftModel',
+  'aircraftTypeLabel',
+  'aircraftTypeCode',
+  'aircraftDescription',
+  'registration',
+  'originCountry',
+];
+
+function hasMeaningfulSourceMeta(sourceMeta = {}) {
+  const summary = summarizeSourceMeta(sourceMeta);
+  return SOURCE_META_FIELDS.some((field) => Boolean(summary[field]));
+}
+
+function createClassificationStageCounters() {
+  return {
+    positionEligible: 0,
+    sourceMetaAttached: 0,
+    callsignPresent: 0,
+    callsignMatched: 0,
+    hexMatched: 0,
+    candidateStates: 0,
+    sourceTypeCandidateHits: 0,
+    sourceOperatorCandidateHits: 0,
+    sourceFieldCoverage: Object.fromEntries(SOURCE_META_FIELDS.map((field) => [field, 0])),
+    sourceHintCounts: {
+      militaryHint: 0,
+      militaryOperatorHint: 0,
+      commercialHint: 0,
+    },
+    sourceRawKeyCounts: {},
+    rawKeyOnlyCandidates: 0,
+    rawKeyOnlySamples: [],
+    sourceShapeSamples: [],
+  };
+}
+
+function recordSourceCoverage(stageCounters, sourceMeta = {}, sourceHints = {}, sourceOperator = null, sourceType = 'unknown', callsign = '') {
+  const summary = summarizeSourceMeta(sourceMeta);
+  const rawPreview = summarizeRawSourcePreview(sourceMeta);
+  if (hasMeaningfulSourceMeta(sourceMeta)) {
+    stageCounters.sourceMetaAttached += 1;
+  }
+  if ((sourceMeta.rawKeys || []).length > 0 && !hasMeaningfulSourceMeta(sourceMeta)) {
+    stageCounters.rawKeyOnlyCandidates += 1;
+    if (stageCounters.rawKeyOnlySamples.length < 5) {
+      stageCounters.rawKeyOnlySamples.push({
+        callsign,
+        rawKeys: [...(sourceMeta.rawKeys || [])].slice(0, 20).sort(),
+      });
+    }
+  }
+  for (const field of SOURCE_META_FIELDS) {
+    if (summary[field]) stageCounters.sourceFieldCoverage[field] += 1;
+  }
+  if (sourceHints.militaryHint) stageCounters.sourceHintCounts.militaryHint += 1;
+  if (sourceHints.militaryOperatorHint) stageCounters.sourceHintCounts.militaryOperatorHint += 1;
+  if (sourceHints.commercialHint) stageCounters.sourceHintCounts.commercialHint += 1;
+  if (sourceOperator) stageCounters.sourceOperatorCandidateHits += 1;
+  if (sourceType !== 'unknown') stageCounters.sourceTypeCandidateHits += 1;
+  for (const rawKey of sourceMeta.rawKeys || []) {
+    if (!rawKey) continue;
+    stageCounters.sourceRawKeyCounts[rawKey] = (stageCounters.sourceRawKeyCounts[rawKey] || 0) + 1;
+  }
+  if (stageCounters.sourceShapeSamples.length < 5 && ((sourceMeta.rawKeys || []).length > 0 || Object.keys(rawPreview).length > 0)) {
+    stageCounters.sourceShapeSamples.push({
+      callsign,
+      rawKeys: [...(sourceMeta.rawKeys || [])].slice(0, 20).sort(),
+      normalized: summary,
+      rawPreview,
+    });
+  }
+}
+
 function deriveSourceHints(sourceMeta = {}) {
   const hintText = getSourceHintText(sourceMeta);
   return {
     hintText,
-    militaryHint: /(AIR FORCE|MILIT|NAVY|MARINE|ARMY|DEFEN[CS]E|SQUADRON|USAF|RAF|NATO|RECON|AWACS|TANKER|AIRLIFT|FIGHTER|BOMBER|DRONE)/.test(hintText),
-    militaryOperatorHint: /(AIR FORCE|NAVY|MARINE|ARMY|DEFEN[CS]E|SQUADRON|EMIRI AIR FORCE|ROYAL .* AIR FORCE)/.test(hintText),
+    militaryHint: /(AIR FORCE|AIR ?SELF ?DEFEN[CS]E|MILIT|NAVY|MARINE|ARMY|DEFEN[CS]E|SQUADRON|\bUSAF\b|\bUSN\b|\bUSMC\b|\bRAF\b|\bRCAF\b|\bRAAF\b|NATO|\bPLAAF\b|\bPLAN\b|\bVKS\b|RECON|AWACS|TANKER|AIRLIFT|FIGHTER|BOMBER|DRONE)/.test(hintText),
+    militaryOperatorHint: /(AIR FORCE|AIR ?SELF ?DEFEN[CS]E|NAVY|MARINE|ARMY|DEFEN[CS]E|SQUADRON|EMIRI AIR FORCE|ROYAL .* AIR FORCE|AEROSPACE FORCES|\bPLAAF\b|\bPLAN\b|NATO)/.test(hintText),
     commercialHint: /(AIRLINES|AIRWAYS|LOGISTICS|EXPRESS|CARGOLUX|TURKISH AIRLINES|ETHIOPIAN AIRLINES|QATAR AIRWAYS|EMIRATES SKYCARGO|SAUDIA)/.test(hintText),
   };
 }
@@ -318,10 +438,10 @@ function deriveSourceHints(sourceMeta = {}) {
 function detectAircraftTypeFromSourceMeta(sourceMeta = {}) {
   const hintText = getSourceHintText(sourceMeta);
   if (!hintText) return 'unknown';
-  if (/(KC-?135|KC-?46|TANKER|REFUEL)/.test(hintText)) return 'tanker';
-  if (/(AWACS|E-3|E-7|AEW|EARLY WARNING)/.test(hintText)) return 'awacs';
-  if (/(C-17|C17|C-130|C130|TRANSPORT|AIRLIFT|CARGO)/.test(hintText)) return 'transport';
-  if (/(RC-135|RC135|RECON|SURVEILLANCE|SIGINT|U-2|P-8|PATROL)/.test(hintText)) return 'reconnaissance';
+  if (/(KC-?135|KC-?46|KC-?10|A330 MRTT|MRTT|TANKER|REFUEL)/.test(hintText)) return 'tanker';
+  if (/(AWACS|AEW&C|AEW|E-2|E-3|E-6|E-7|EARLY WARNING)/.test(hintText)) return 'awacs';
+  if (/(C-17|C17|C-130|C130|C-2|C2|C-27|C27|A400M|IL-76|IL76|Y-20|Y20|TRANSPORT|AIRLIFT|CARGO)/.test(hintText)) return 'transport';
+  if (/(RC-135|RC135|RECON|SURVEILLANCE|SIGINT|ELINT|ISR|U-2|P-8|P8|P-3|P3|PATROL)/.test(hintText)) return 'reconnaissance';
   if (/(MQ-9|MQ9|RQ-4|RQ4|DRONE|UAS|UAV)/.test(hintText)) return 'drone';
   if (/(B-52|B52|B-1|B1|B-2|B2|BOMBER)/.test(hintText)) return 'bomber';
   if (/(F-16|F16|F-15|F15|F-18|F18|F-22|F22|F-35|F35|J-10|J10|J-11|J11|J-16|J16|SU-27|SU27|SU-30|SU30|SU-35|SU35|MIG-29|MIG29|FIGHTER)/.test(hintText)) return 'fighter';
@@ -331,15 +451,30 @@ function detectAircraftTypeFromSourceMeta(sourceMeta = {}) {
 function deriveOperatorFromSourceMeta(sourceMeta = {}) {
   const hintText = getSourceHintText(sourceMeta);
   if (!hintText) return null;
-  if (/QATAR EMIRI AIR FORCE|QEAF/.test(hintText)) return { operator: 'qeaf', operatorCountry: 'Qatar' };
-  if (/ROYAL SAUDI AIR FORCE|RSAF/.test(hintText)) return { operator: 'rsaf', operatorCountry: 'Saudi Arabia' };
-  if (/TURKISH AIR FORCE|TURAF|TRKAF/.test(hintText)) return { operator: 'turaf', operatorCountry: 'Turkey' };
-  if (/UNITED ARAB EMIRATES AIR FORCE|UAE AIR FORCE|EMIRATI AIR FORCE/.test(hintText)) return { operator: 'uaeaf', operatorCountry: 'UAE' };
-  if (/KUWAIT AIR FORCE/.test(hintText)) return { operator: 'kuwaf', operatorCountry: 'Kuwait' };
-  if (/EGYPTIAN AIR FORCE/.test(hintText)) return { operator: 'egyaf', operatorCountry: 'Egypt' };
-  if (/PAKISTAN AIR FORCE/.test(hintText)) return { operator: 'paf', operatorCountry: 'Pakistan' };
-  if (/JASDF|JAPAN AIR SELF DEFENSE FORCE/.test(hintText)) return { operator: 'jasdf', operatorCountry: 'Japan' };
-  if (/ROKAF|REPUBLIC OF KOREA AIR FORCE/.test(hintText)) return { operator: 'rokaf', operatorCountry: 'South Korea' };
+  if (/PEOPLE'?S LIBERATION ARMY AIR FORCE|\bPLAAF\b|CHINESE AIR FORCE/.test(hintText)) return { operator: 'plaaf', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  if (/PEOPLE'?S LIBERATION ARMY NAVY|\bPLAN\b/.test(hintText)) return { operator: 'plan', operatorCountry: 'China', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES AIR FORCE|US AIR FORCE|\bUSAF\b/.test(hintText)) return { operator: 'usaf', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES NAVY|US NAVY|\bUSN\b/.test(hintText)) return { operator: 'usn', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES MARINE CORPS|US MARINE|\bUSMC\b/.test(hintText)) return { operator: 'usmc', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED STATES ARMY|US ARMY/.test(hintText)) return { operator: 'usa', operatorCountry: 'USA', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL AIR FORCE|\bRAF\b/.test(hintText)) return { operator: 'raf', operatorCountry: 'UK', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL NAVY/.test(hintText)) return { operator: 'rn', operatorCountry: 'UK', reason: 'source_operator', confidence: 'high' };
+  if (/FRENCH AIR FORCE|ARMEE DE L'?AIR|ARMÉE DE L'?AIR|\bFAF\b/.test(hintText)) return { operator: 'faf', operatorCountry: 'France', reason: 'source_operator', confidence: 'high' };
+  if (/GERMAN AIR FORCE|LUFTWAFFE|\bGAF\b/.test(hintText)) return { operator: 'gaf', operatorCountry: 'Germany', reason: 'source_operator', confidence: 'high' };
+  if (/ISRAELI AIR FORCE|\bIAF\b/.test(hintText)) return { operator: 'iaf', operatorCountry: 'Israel', reason: 'source_operator', confidence: 'high' };
+  if (/NATO/.test(hintText)) return { operator: 'nato', operatorCountry: 'NATO', reason: 'source_operator', confidence: 'high' };
+  if (/QATAR EMIRI AIR FORCE|\bQEAF\b/.test(hintText)) return { operator: 'qeaf', operatorCountry: 'Qatar', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL SAUDI AIR FORCE|\bRSAF\b/.test(hintText)) return { operator: 'rsaf', operatorCountry: 'Saudi Arabia', reason: 'source_operator', confidence: 'high' };
+  if (/TURKISH AIR FORCE|\bTURAF\b|\bTRKAF\b/.test(hintText)) return { operator: 'turaf', operatorCountry: 'Turkey', reason: 'source_operator', confidence: 'high' };
+  if (/UNITED ARAB EMIRATES AIR FORCE|UAE AIR FORCE|EMIRATI AIR FORCE/.test(hintText)) return { operator: 'uaeaf', operatorCountry: 'UAE', reason: 'source_operator', confidence: 'high' };
+  if (/KUWAIT AIR FORCE/.test(hintText)) return { operator: 'kuwaf', operatorCountry: 'Kuwait', reason: 'source_operator', confidence: 'high' };
+  if (/EGYPTIAN AIR FORCE/.test(hintText)) return { operator: 'egyaf', operatorCountry: 'Egypt', reason: 'source_operator', confidence: 'high' };
+  if (/PAKISTAN AIR FORCE|\bPAF\b/.test(hintText)) return { operator: 'paf', operatorCountry: 'Pakistan', reason: 'source_operator', confidence: 'high' };
+  if (/\bJASDF\b|JAPAN AIR SELF DEFENSE FORCE/.test(hintText)) return { operator: 'jasdf', operatorCountry: 'Japan', reason: 'source_operator', confidence: 'high' };
+  if (/\bROKAF\b|REPUBLIC OF KOREA AIR FORCE/.test(hintText)) return { operator: 'rokaf', operatorCountry: 'South Korea', reason: 'source_operator', confidence: 'high' };
+  if (/RUSSIAN AEROSPACE FORCES|\bVKS\b/.test(hintText)) return { operator: 'vks', operatorCountry: 'Russia', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL AUSTRALIAN AIR FORCE|\bRAAF\b/.test(hintText)) return { operator: 'raaf', operatorCountry: 'Australia', reason: 'source_operator', confidence: 'high' };
+  if (/ROYAL CANADIAN AIR FORCE|\bRCAF\b|CANADIAN ARMED FORCES/.test(hintText)) return { operator: 'rcaf', operatorCountry: 'Canada', reason: 'source_operator', confidence: 'high' };
   return null;
 }
 
@@ -369,7 +504,7 @@ function parseProxyAuth() {
   };
 }
 
-function proxyFetchJson(url, { headers = {}, timeout = 15000 } = {}) {
+function proxyFetchJson(url, { headers = {}, timeout = 15000, method = 'GET', body = null } = {}) {
   const parsed = new URL(url);
   const proxy = parseProxyAuth();
   if (!proxy) return Promise.reject(new Error('No proxy config'));
@@ -394,12 +529,16 @@ function proxyFetchJson(url, { headers = {}, timeout = 15000 } = {}) {
         return reject(new Error(`CONNECT ${res.statusCode}`));
       }
       const tlsSocket = tls.connect({ socket, servername: parsed.hostname }, () => {
+        const requestHeaders = { ...headers, 'Accept': 'application/json', 'User-Agent': CHROME_UA };
+        if (body != null && !Object.keys(requestHeaders).some((k) => k.toLowerCase() === 'content-length')) {
+          requestHeaders['Content-Length'] = Buffer.byteLength(body);
+        }
         const req = https.request({
           socket: tlsSocket,
           hostname: parsed.hostname,
           path: parsed.pathname + parsed.search,
-          method: 'GET',
-          headers: { ...headers, 'Accept': 'application/json', 'User-Agent': CHROME_UA },
+          method,
+          headers: requestHeaders,
           timeout,
         }, (resp) => {
           let data = '';
@@ -415,6 +554,7 @@ function proxyFetchJson(url, { headers = {}, timeout = 15000 } = {}) {
         });
         req.on('error', (e) => { clearTimeout(timer); reject(e); });
         req.on('timeout', () => { req.destroy(); clearTimeout(timer); reject(new Error('TIMEOUT')); });
+        if (body != null) req.write(body);
         req.end();
       });
       tlsSocket.on('error', (e) => { clearTimeout(timer); reject(e); });
@@ -428,34 +568,136 @@ function proxyFetchJson(url, { headers = {}, timeout = 15000 } = {}) {
 // ── Data Sources ───────────────────────────────────────────
 const OPENSKY_BASE = 'https://opensky-network.org/api';
 const WINGBITS_BASE = 'https://customer-api.wingbits.com/v1/flights';
+const OPENSKY_TOKEN_URL = 'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token';
+const OPENSKY_AUTH_COOLDOWN_MS = 60_000;
+const OPENSKY_AUTH_RETRY_DELAYS = [0, 2_000, 5_000];
+let openskyToken = null;
+let openskyTokenExpiry = 0;
+let openskyTokenPromise = null;
+let openskyAuthCooldownUntil = 0;
+
+function clearOpenSkyToken() {
+  openskyToken = null;
+  openskyTokenExpiry = 0;
+}
+
+function isOpenSkyUnauthorizedError(error) {
+  return /HTTP 401\b/i.test(String(error?.message || error || ''));
+}
+
+async function getOpenSkyToken() {
+  const clientId = process.env.OPENSKY_CLIENT_ID;
+  const clientSecret = process.env.OPENSKY_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+
+  if (openskyToken && Date.now() < openskyTokenExpiry - 60_000) {
+    return openskyToken;
+  }
+  if (Date.now() < openskyAuthCooldownUntil) {
+    return null;
+  }
+  if (openskyTokenPromise) return openskyTokenPromise;
+
+  openskyTokenPromise = (async () => {
+    let lastError = null;
+
+    for (let attempt = 0; attempt < OPENSKY_AUTH_RETRY_DELAYS.length; attempt += 1) {
+      const delay = OPENSKY_AUTH_RETRY_DELAYS[attempt];
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+
+      const postData = `grant_type=client_credentials&client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}`;
+      const headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': CHROME_UA,
+      };
+
+      try {
+        let data;
+        if (PROXY_ENABLED) {
+          data = await proxyFetchJson(OPENSKY_TOKEN_URL, {
+            method: 'POST',
+            headers,
+            body: postData,
+            timeout: 15_000,
+          });
+        } else {
+          const resp = await fetch(OPENSKY_TOKEN_URL, {
+            method: 'POST',
+            headers,
+            body: postData,
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!resp.ok) {
+            const body = await resp.text().catch(() => '');
+            throw new Error(`OpenSky token HTTP ${resp.status}: ${body.substring(0, 200)}`);
+          }
+          data = await resp.json();
+        }
+
+        if (!data?.access_token) {
+          throw new Error('OpenSky token response missing access_token');
+        }
+        openskyToken = data.access_token;
+        openskyTokenExpiry = Date.now() + (Number(data.expires_in) || 1800) * 1000;
+        openskyAuthCooldownUntil = 0;
+        return openskyToken;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    clearOpenSkyToken();
+    openskyAuthCooldownUntil = Date.now() + OPENSKY_AUTH_COOLDOWN_MS;
+    throw lastError || new Error('OpenSky token acquisition failed');
+  })();
+
+  try {
+    return await openskyTokenPromise;
+  } finally {
+    openskyTokenPromise = null;
+  }
+}
 
 async function fetchOpenSkyAuthenticated(region) {
-  const username = process.env.OPENSKY_USERNAME;
-  const password = process.env.OPENSKY_PASSWORD;
-  if (!username || !password) return null;
-
-  const params = `lamin=${region.lamin}&lamax=${region.lamax}&lomin=${region.lomin}&lomax=${region.lomax}`;
+  const params = `lamin=${region.lamin}&lamax=${region.lamax}&lomin=${region.lomin}&lomax=${region.lomax}&extended=1`;
   const url = `${OPENSKY_BASE}/states/all?${params}`;
 
-  if (PROXY_ENABLED) {
-    const authHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
-    const data = await proxyFetchJson(url, {
-      headers: { Authorization: authHeader },
-    });
-    return data.states || [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const token = await getOpenSkyToken();
+    if (!token) return null;
+    const headers = { Authorization: `Bearer ${token}` };
+
+    try {
+      if (PROXY_ENABLED) {
+        const data = await proxyFetchJson(url, { headers });
+        return data.states || [];
+      }
+
+      const resp = await fetch(url, {
+        headers: { ...headers, 'User-Agent': CHROME_UA, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        if (resp.status === 401) {
+          clearOpenSkyToken();
+        }
+        throw new Error(`OpenSky auth HTTP ${resp.status}: ${body.substring(0, 200)}`);
+      }
+      const data = await resp.json();
+      return data.states || [];
+    } catch (error) {
+      if (isOpenSkyUnauthorizedError(error)) {
+        clearOpenSkyToken();
+        if (attempt === 0) continue;
+      }
+      throw error;
+    }
   }
 
-  const authHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
-  const resp = await fetch(url, {
-    headers: { Authorization: authHeader, 'User-Agent': CHROME_UA, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '');
-    throw new Error(`OpenSky auth HTTP ${resp.status}: ${body.substring(0, 200)}`);
-  }
-  const data = await resp.json();
-  return data.states || [];
+  return null;
 }
 
 async function fetchOpenSkyAnonymous(region) {
@@ -564,6 +806,15 @@ async function fetchAllStates() {
   const seenIds = new Set();
   const allStates = [];
   let source = 'none';
+  const oauthConfigured = Boolean(process.env.OPENSKY_CLIENT_ID && process.env.OPENSKY_CLIENT_SECRET);
+  const fetchSources = {
+    wingbitsUsed: false,
+    oauthConfigured,
+    proxyEnabled: PROXY_ENABLED,
+    openSkyAuthSuccess: false,
+    openSkyAnonFallbackUsed: false,
+    regions: [],
+  };
 
   // Tier 1: Wingbits — no proxy needed, fast, reliable
   try {
@@ -576,6 +827,7 @@ async function fetchAllStates() {
     }
     if (wbStates.length > 0) {
       source = 'wingbits';
+      fetchSources.wingbitsUsed = true;
       console.log(`  [Wingbits] ${wbStates.length} unique aircraft loaded`);
     }
   } catch (e) {
@@ -585,14 +837,27 @@ async function fetchAllStates() {
   // Tier 2: OpenSky (auth via proxy) — supplements with aircraft Wingbits may miss
   for (const region of QUERY_REGIONS) {
     let states = null;
+    const regionSource = {
+      name: region.name,
+      authStatus: oauthConfigured ? 'pending' : 'not_configured',
+      anonStatus: 'not_needed',
+      statesSeen: 0,
+      statesAdded: 0,
+    };
 
     try {
       states = await fetchOpenSkyAuthenticated(region);
       if (states && states.length > 0) {
         if (source === 'none') source = 'opensky-auth';
+        fetchSources.openSkyAuthSuccess = true;
+        regionSource.authStatus = 'success';
+        regionSource.statesSeen = states.length;
         console.log(`  [OpenSky Auth] ${region.name}: ${states.length} states`);
+      } else if (oauthConfigured) {
+        regionSource.authStatus = 'empty';
       }
     } catch (e) {
+      regionSource.authStatus = `error:${redactProxy(e.message)}`;
       console.warn(`  [OpenSky Auth] ${region.name}: ${redactProxy(e.message)}`);
     }
 
@@ -602,9 +867,15 @@ async function fetchAllStates() {
         states = await fetchOpenSkyAnonymous(region);
         if (states && states.length > 0) {
           if (source === 'none') source = 'opensky-anon';
+          fetchSources.openSkyAnonFallbackUsed = true;
+          regionSource.anonStatus = 'success';
+          regionSource.statesSeen = states.length;
           console.log(`  [OpenSky Anon] ${region.name}: ${states.length} states`);
+        } else {
+          regionSource.anonStatus = 'empty';
         }
       } catch (e) {
+        regionSource.anonStatus = `error:${redactProxy(e.message)}`;
         console.warn(`  [OpenSky Anon] ${region.name}: ${redactProxy(e.message)}`);
       }
     }
@@ -618,28 +889,41 @@ async function fetchAllStates() {
         allStates.push(state);
         added++;
       }
+      regionSource.statesAdded = added;
       if (added > 0) console.log(`  [OpenSky] +${added} new from ${region.name} (total: ${allStates.length})`);
     }
+
+    fetchSources.regions.push(regionSource);
   }
 
-  return { allStates, source };
+  return { allStates, source, fetchSources };
 }
 
 // ── Filter & Build Military Flights ────────────────────────
-function summarizeClassificationAudit(rawStates, flights, rejected) {
+function summarizeClassificationAudit(rawStates, flights, rejected, stageCounters) {
   const admittedByReason = {};
   const rejectedByReason = {};
   let typedByCallsign = 0;
   let typedBySource = 0;
   let hexOnly = 0;
   let unknownType = 0;
+  let operatorOther = 0;
+  let sourceOperatorInferred = 0;
+  let typedFlights = 0;
+  let operatorResolved = 0;
+  let highConfidenceFlights = 0;
 
   for (const flight of flights) {
     admittedByReason[flight.admissionReason] = (admittedByReason[flight.admissionReason] || 0) + 1;
-    if (flight.classificationReason === 'callsign_pattern') typedByCallsign += 1;
-    if (flight.classificationReason === 'source_metadata') typedBySource += 1;
+    if (flight.aircraftTypeInferenceReason === 'callsign_pattern' || flight.classificationReason === 'callsign_pattern') typedByCallsign += 1;
+    if (flight.aircraftTypeInferenceReason === 'source_metadata' || flight.operatorInferenceReason === 'source_metadata' || flight.classificationReason === 'source_metadata') typedBySource += 1;
+    if (flight.operatorInferenceReason === 'source_metadata') sourceOperatorInferred += 1;
     if (flight.admissionReason.startsWith('hex_')) hexOnly += 1;
     if (flight.aircraftType === 'unknown') unknownType += 1;
+    else typedFlights += 1;
+    if (flight.operator === 'other') operatorOther += 1;
+    else operatorResolved += 1;
+    if (flight.confidence === 'high') highConfidenceFlights += 1;
   }
 
   for (const row of rejected) {
@@ -654,8 +938,40 @@ function summarizeClassificationAudit(rawStates, flights, rejected) {
     rejectedByReason,
     typedByCallsign,
     typedBySource,
+    sourceOperatorInferred,
     hexOnlyAdmissions: hexOnly,
+    operatorOtherRate: flights.length ? Number((operatorOther / flights.length).toFixed(3)) : 0,
     unknownTypeRate: flights.length ? Number((unknownType / flights.length).toFixed(3)) : 0,
+    stageWaterfall: {
+      rawStates,
+      positionEligible: stageCounters.positionEligible,
+      sourceMetaAttached: stageCounters.sourceMetaAttached,
+      callsignPresent: stageCounters.callsignPresent,
+      callsignMatched: stageCounters.callsignMatched,
+      hexMatched: stageCounters.hexMatched,
+      candidateStates: stageCounters.candidateStates,
+      admittedFlights: flights.length,
+      typedFlights,
+      operatorResolved,
+      highConfidenceFlights,
+    },
+    sourceCoverage: {
+      ...Object.fromEntries(
+        Object.entries(stageCounters.sourceFieldCoverage).map(([field, count]) => [`${field}Present`, count]),
+      ),
+      militaryHint: stageCounters.sourceHintCounts.militaryHint,
+      militaryOperatorHint: stageCounters.sourceHintCounts.militaryOperatorHint,
+      commercialHint: stageCounters.sourceHintCounts.commercialHint,
+      sourceOperatorCandidateHits: stageCounters.sourceOperatorCandidateHits,
+      sourceTypeCandidateHits: stageCounters.sourceTypeCandidateHits,
+      rawKeyOnlyCandidates: stageCounters.rawKeyOnlyCandidates,
+      topRawKeys: Object.entries(stageCounters.sourceRawKeyCounts)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 10)
+        .map(([key, count]) => ({ key, count })),
+      rawKeyOnlySamples: stageCounters.rawKeyOnlySamples,
+      sourceShapeSamples: stageCounters.sourceShapeSamples,
+    },
     samples: {
       accepted: flights.slice(0, 8).map((flight) => ({
         callsign: flight.callsign,
@@ -665,6 +981,9 @@ function summarizeClassificationAudit(rawStates, flights, rejected) {
         confidence: flight.confidence,
         admissionReason: flight.admissionReason,
         classificationReason: flight.classificationReason,
+        operatorInferenceReason: flight.operatorInferenceReason,
+        aircraftTypeInferenceReason: flight.aircraftTypeInferenceReason,
+        sourceMeta: summarizeSourceMeta(flight.sourceMeta),
       })),
       rejected: rejected.slice(0, 8),
     },
@@ -681,25 +1000,36 @@ function pushRejectedFlight(rejected, state, reason, extra = {}) {
 }
 
 function classifyCallsignMatchedFlight({ csMatch, hexMatch, callsign, sourceMeta }) {
+  const sourceOperator = deriveOperatorFromSourceMeta(sourceMeta);
+  const operator = (csMatch.operator === 'other' && sourceOperator?.operator) ? sourceOperator.operator : csMatch.operator;
+  const operatorCountry = (csMatch.operator === 'other' && sourceOperator?.operatorCountry)
+    ? sourceOperator.operatorCountry
+    : (OPERATOR_COUNTRY[csMatch.operator] || 'Unknown');
   let aircraftType = csMatch.aircraftType || detectAircraftType(callsign);
   let classificationReason = csMatch.aircraftType ? 'callsign_pattern' : 'untyped';
+  let aircraftTypeInferenceReason = csMatch.aircraftType ? 'callsign_pattern' : 'untyped';
+  const operatorInferenceReason = operator !== csMatch.operator ? 'source_metadata' : 'callsign_pattern';
   if (aircraftType === 'unknown') {
     const sourceType = detectAircraftTypeFromSourceMeta(sourceMeta);
     if (sourceType !== 'unknown') {
       aircraftType = sourceType;
       classificationReason = 'source_metadata';
+      aircraftTypeInferenceReason = 'source_metadata';
     }
   } else if (!csMatch.aircraftType) {
     classificationReason = 'callsign_pattern';
+    aircraftTypeInferenceReason = 'callsign_pattern';
   }
 
   return {
-    operator: csMatch.operator,
-    operatorCountry: OPERATOR_COUNTRY[csMatch.operator] || 'Unknown',
+    operator,
+    operatorCountry,
     aircraftType,
     confidence: hexMatch ? 'high' : 'medium',
     admissionReason: hexMatch ? 'callsign_plus_hex' : 'callsign_pattern',
     classificationReason,
+    aircraftTypeInferenceReason,
+    operatorInferenceReason,
   };
 }
 
@@ -715,14 +1045,19 @@ function classifyHexMatchedFlight({ state, hexMatch, callsign, sourceMeta, sourc
   const sourceOperator = deriveOperatorFromSourceMeta(sourceMeta);
   let aircraftType = detectAircraftType(callsign);
   let classificationReason = sourceOperator ? 'source_metadata' : 'untyped';
+  let aircraftTypeInferenceReason = 'untyped';
   if (aircraftType === 'unknown') {
     const sourceType = detectAircraftTypeFromSourceMeta(sourceMeta);
     if (sourceType !== 'unknown') {
       aircraftType = sourceType;
       classificationReason = 'source_metadata';
+      aircraftTypeInferenceReason = 'source_metadata';
     }
   } else if (!sourceOperator) {
     classificationReason = 'callsign_heuristic';
+    aircraftTypeInferenceReason = 'callsign_heuristic';
+  } else {
+    aircraftTypeInferenceReason = 'callsign_heuristic';
   }
 
   return {
@@ -732,6 +1067,8 @@ function classifyHexMatchedFlight({ state, hexMatch, callsign, sourceMeta, sourc
     confidence: trustedHex ? 'medium' : 'low',
     admissionReason: trustedHex ? 'hex_trusted' : 'hex_supported_by_source',
     classificationReason,
+    aircraftTypeInferenceReason,
+    operatorInferenceReason: sourceOperator ? 'source_metadata' : 'hex_range',
   };
 }
 
@@ -761,8 +1098,10 @@ function buildMilitaryFlightRecord(state, classified, sourceHints) {
     onGround: state[8],
     squawk: state[14] || undefined,
     ...classified,
+    sourceMeta: summarizeSourceMeta(state[15] || {}),
     sourceHints: {
       militaryHint: sourceHints.militaryHint,
+      militaryOperatorHint: sourceHints.militaryOperatorHint,
       commercialHint: sourceHints.commercialHint,
     },
     isInteresting: isInteresting || false,
@@ -775,6 +1114,7 @@ function filterMilitaryFlights(allStates) {
   const flights = [];
   const byType = {};
   const rejected = [];
+  const stageCounters = createClassificationStageCounters();
 
   for (const state of allStates) {
     const icao24 = state[0];
@@ -782,13 +1122,21 @@ function filterMilitaryFlights(allStates) {
     const lat = state[6];
     const lon = state[5];
     if (lat == null || lon == null) continue;
+    stageCounters.positionEligible += 1;
 
     const originCountry = state[2] || '';
     const sourceMeta = state[15] || {};
     const sourceHints = deriveSourceHints(sourceMeta);
+    const sourceOperator = deriveOperatorFromSourceMeta(sourceMeta);
+    const sourceType = detectAircraftTypeFromSourceMeta(sourceMeta);
+    recordSourceCoverage(stageCounters, sourceMeta, sourceHints, sourceOperator, sourceType, callsign);
+    if (callsign) stageCounters.callsignPresent += 1;
     const csMatch = callsign ? identifyByCallsign(callsign, originCountry) : null;
     const commercialMatch = callsign ? identifyCommercialCallsign(callsign) : null;
     const hexMatch = isKnownHex(icao24);
+    if (csMatch) stageCounters.callsignMatched += 1;
+    if (hexMatch) stageCounters.hexMatched += 1;
+    if (csMatch || hexMatch) stageCounters.candidateStates += 1;
 
     if (!csMatch && commercialMatch && !sourceHints.militaryHint) {
       pushRejectedFlight(rejected, state, 'commercial_callsign_override');
@@ -817,7 +1165,7 @@ function filterMilitaryFlights(allStates) {
   return {
     flights,
     byType,
-    audit: summarizeClassificationAudit(allStates.length, flights, rejected),
+    audit: summarizeClassificationAudit(allStates.length, flights, rejected, stageCounters),
   };
 }
 
@@ -909,21 +1257,37 @@ async function main() {
     process.exit(0);
   }
 
-  let allStates, source, flights, byType, classificationAudit;
+  let allStates, source, flights, byType, classificationAudit, fetchSources;
   try {
     console.log('  Fetching from all sources...');
-    ({ allStates, source } = await fetchAllStates());
+    ({ allStates, source, fetchSources } = await fetchAllStates());
     console.log(`  Raw states: ${allStates.length} (source: ${source})`);
 
     ({ flights, byType, audit: classificationAudit } = filterMilitaryFlights(allStates));
+    classificationAudit.fetchSources = fetchSources;
     console.log(`  Military: ${flights.length} (${Object.entries(byType).map(([t, n]) => `${t}:${n}`).join(', ')})`);
     if (classificationAudit) {
       console.log(`  [Audit] unknownRate=${classificationAudit.unknownTypeRate} hexOnly=${classificationAudit.hexOnlyAdmissions} rejected=${classificationAudit.rejectedFlights}`);
+      console.log(
+        `  [Source] wingbits=${fetchSources.wingbitsUsed ? 'yes' : 'no'} oauthConfigured=${fetchSources.oauthConfigured ? 'yes' : 'no'} authSuccess=${fetchSources.openSkyAuthSuccess ? 'yes' : 'no'} anonFallback=${fetchSources.openSkyAnonFallbackUsed ? 'yes' : 'no'}`,
+      );
+      console.log(
+        `  [Source] regions=${fetchSources.regions.map((region) => `${region.name}:auth=${region.authStatus},anon=${region.anonStatus},seen=${region.statesSeen},added=${region.statesAdded}`).join(' | ')}`,
+      );
+      console.log(
+        `  [Audit] waterfall raw=${classificationAudit.stageWaterfall.rawStates} pos=${classificationAudit.stageWaterfall.positionEligible} candidate=${classificationAudit.stageWaterfall.candidateStates} admitted=${classificationAudit.stageWaterfall.admittedFlights} typed=${classificationAudit.stageWaterfall.typedFlights}`,
+      );
+      console.log(
+        `  [Audit] source attached=${classificationAudit.stageWaterfall.sourceMetaAttached} operatorHits=${classificationAudit.sourceCoverage.sourceOperatorCandidateHits} typeHits=${classificationAudit.sourceCoverage.sourceTypeCandidateHits} topKeys=${classificationAudit.sourceCoverage.topRawKeys.map((item) => `${item.key}:${item.count}`).join(',') || 'none'}`,
+      );
+      console.log(
+        `  [Audit] rawKeyOnly=${classificationAudit.sourceCoverage.rawKeyOnlyCandidates} samples=${classificationAudit.sourceCoverage.rawKeyOnlySamples.length} sourceShapeSamples=${classificationAudit.sourceCoverage.sourceShapeSamples.length}`,
+      );
     }
   } catch (err) {
     await releaseLock('military:flights', runId);
     console.error(`  FETCH FAILED: ${err.message || err}`);
-    await extendExistingTtl([LIVE_KEY], LIVE_TTL);
+    await extendExistingTtl([LIVE_KEY, 'seed-meta:military:flights'], LIVE_TTL);
     await extendExistingTtl([STALE_KEY, THEATER_POSTURE_STALE_KEY, MILITARY_SURGES_STALE_KEY, MILITARY_FORECAST_INPUTS_STALE_KEY, MILITARY_CLASSIFICATION_AUDIT_STALE_KEY], STALE_TTL);
     await extendExistingTtl([THEATER_POSTURE_LIVE_KEY, MILITARY_FORECAST_INPUTS_LIVE_KEY, MILITARY_CLASSIFICATION_AUDIT_LIVE_KEY], THEATER_POSTURE_LIVE_TTL);
     await extendExistingTtl([THEATER_POSTURE_BACKUP_KEY], THEATER_POSTURE_BACKUP_TTL);
