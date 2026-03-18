@@ -5,7 +5,7 @@ import { loadEnvFile, CHROME_UA, runSeed, sleep } from './_seed-utils.mjs';
 loadEnvFile(import.meta.url);
 
 const CANONICAL_KEY = 'intelligence:gdelt-intel:v1';
-const CACHE_TTL = 7200; // 2h — aligns with health.js maxStaleMin:120
+const CACHE_TTL = 14400; // 4h — data must outlive health.js maxStaleMin:180 to allow STALE warning before EMPTY/CRIT
 const GDELT_DOC_API = 'https://api.gdeltproject.org/api/v2/doc/doc';
 const INTER_TOPIC_DELAY_MS = 20_000; // 20s between topics to avoid 429
 

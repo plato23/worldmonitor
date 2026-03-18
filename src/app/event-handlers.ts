@@ -852,7 +852,7 @@ export class EventHandlerManager implements AppModule {
   }
 
   setupPizzIntIndicator(): void {
-    if (SITE_VARIANT === 'tech' || SITE_VARIANT === 'finance' || SITE_VARIANT === 'happy') return;
+    if (SITE_VARIANT !== 'full') return;
 
     this.ctx.pizzintIndicator = new PizzIntIndicator();
     const headerLeft = this.ctx.container.querySelector('.header-left');

@@ -115,7 +115,7 @@ const SEED_META = {
   weatherAlerts:    { key: 'seed-meta:weather:alerts',             maxStaleMin: 30 },
   spending:         { key: 'seed-meta:economic:spending',          maxStaleMin: 120 },
   techEvents:       { key: 'seed-meta:research:tech-events',       maxStaleMin: 420 },
-  gdeltIntel:       { key: 'seed-meta:intelligence:gdelt-intel',   maxStaleMin: 120 },
+  gdeltIntel:       { key: 'seed-meta:intelligence:gdelt-intel',   maxStaleMin: 180 },
   forecasts:        { key: 'seed-meta:forecast:predictions',       maxStaleMin: 90 },
   sectors:          { key: 'seed-meta:market:sectors',             maxStaleMin: 30 },
   techReadiness:    { key: 'seed-meta:economic:worldbank-techreadiness:v1', maxStaleMin: 10080 },

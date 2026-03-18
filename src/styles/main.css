@@ -8743,7 +8743,6 @@ a.prediction-link:hover {
 }
 
 .sanctions-summary-label,
-.sanctions-headline-label,
 .sanctions-section-title {
   font-size: 9px;
   text-transform: uppercase;
@@ -8770,7 +8769,6 @@ a.prediction-link:hover {
   color: var(--accent);
 }
 
-.sanctions-headlines,
 .sanctions-sections {
   display: flex;
   flex-direction: column;
@@ -8778,24 +8776,9 @@ a.prediction-link:hover {
   padding: 0 8px;
 }
 
-.sanctions-headline,
 .sanctions-section {
   border: 1px solid var(--border);
   background: var(--surface);
-}
-
-.sanctions-headline {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  align-items: baseline;
-}
-
-.sanctions-headline-value {
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-align: right;
 }
 
 .sanctions-section-title {
