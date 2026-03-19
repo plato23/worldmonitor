@@ -8,6 +8,7 @@ import {
   buildForecastTraceArtifacts,
   buildForecastRunWorldState,
   buildCrossSituationEffects,
+  buildInteractionWatchlist,
   attachSituationContext,
   projectSituationClusters,
   refreshPublishedNarratives,
@@ -1530,6 +1531,234 @@ describe('forecast run world state', () => {
       && item.targetSituationId === target.situationId
       && item.channel === 'logistics_disruption'
     )));
+  });
+
+  it('dedupes the interaction watchlist by source target and channel before report surfacing', () => {
+    const watchlist = buildInteractionWatchlist([
+      {
+        sourceSituationId: 'sit-a',
+        targetSituationId: 'sit-b',
+        sourceLabel: 'Brazil cyber situation',
+        targetLabel: 'United States cyber and political situation',
+        strongestChannel: 'cyber_disruption',
+        interactionType: 'spillover',
+        stage: 'round_1',
+        score: 4.2,
+        confidence: 0.71,
+        sourceActorName: 'Cyber unit',
+        targetActorName: 'Agency',
+      },
+      {
+        sourceSituationId: 'sit-a',
+        targetSituationId: 'sit-b',
+        sourceLabel: 'Brazil cyber situation',
+        targetLabel: 'United States cyber and political situation',
+        strongestChannel: 'cyber_disruption',
+        interactionType: 'spillover',
+        stage: 'round_2',
+        score: 4.4,
+        confidence: 0.74,
+        sourceActorName: 'Cyber unit',
+        targetActorName: 'Agency',
+      },
+    ]);
+
+    assert.equal(watchlist.length, 1);
+    assert.equal(watchlist[0].label, 'Brazil cyber situation -> United States cyber and political situation');
+    assert.ok(watchlist[0].summary.includes('2 round(s)'));
+  });
+
+  it('blocks weak cross-theater political effects without strong actor continuity', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-politics-eu',
+          label: 'Germany political situation',
+          dominantDomain: 'political',
+          familyId: 'fam-politics',
+          familyLabel: 'Cross-regional political instability family',
+          regions: ['Germany'],
+          actorIds: ['actor-germany'],
+          effectChannels: [{ type: 'political_pressure', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.54,
+          totalPressure: 0.62,
+          totalStabilization: 0.39,
+        },
+        {
+          situationId: 'sit-conflict-me',
+          label: 'Israel conflict and political situation',
+          dominantDomain: 'conflict',
+          familyId: 'fam-conflict',
+          familyLabel: 'Cross-regional war theater family',
+          regions: ['Israel'],
+          actorIds: ['actor-israel'],
+          effectChannels: [],
+          posture: 'escalatory',
+          postureScore: 0.91,
+          totalPressure: 0.95,
+          totalStabilization: 0.18,
+        },
+      ],
+      reportableInteractionLedger: [
+        {
+          sourceSituationId: 'sit-politics-eu',
+          targetSituationId: 'sit-conflict-me',
+          sourceLabel: 'Germany political situation',
+          targetLabel: 'Israel conflict and political situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'spillover',
+          stage: 'round_1',
+          score: 4.9,
+          confidence: 0.73,
+          actorSpecificity: 0.78,
+          directLinkCount: 1,
+          sharedActor: true,
+          regionLink: false,
+          sourceActorName: 'Coalition bloc',
+          targetActorName: 'Cabinet office',
+        },
+      ],
+    });
+
+    assert.equal(effects.length, 0);
+  });
+
+  it('allows logistics effects with strong confidence while filtering weaker political ones', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-baltic',
+          label: 'Baltic Sea supply chain situation',
+          dominantDomain: 'supply_chain',
+          familyId: 'fam-supply',
+          familyLabel: 'Baltic maritime supply pressure family',
+          regions: ['Baltic Sea', 'Black Sea'],
+          actorIds: ['actor-shipping'],
+          effectChannels: [{ type: 'logistics_disruption', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.47,
+          totalPressure: 0.58,
+          totalStabilization: 0.33,
+        },
+        {
+          situationId: 'sit-blacksea-market',
+          label: 'Black Sea market situation',
+          dominantDomain: 'market',
+          familyId: 'fam-market',
+          familyLabel: 'Black Sea market repricing family',
+          regions: ['Black Sea'],
+          actorIds: ['actor-market'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.42,
+          totalPressure: 0.45,
+          totalStabilization: 0.32,
+        },
+        {
+          situationId: 'sit-brazil-politics',
+          label: 'Brazil political situation',
+          dominantDomain: 'political',
+          familyId: 'fam-politics-a',
+          familyLabel: 'Cross-regional political instability family',
+          regions: ['Brazil'],
+          actorIds: ['actor-brazil'],
+          effectChannels: [{ type: 'political_pressure', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.55,
+          totalPressure: 0.61,
+          totalStabilization: 0.35,
+        },
+        {
+          situationId: 'sit-uk-politics',
+          label: 'United Kingdom political situation',
+          dominantDomain: 'political',
+          familyId: 'fam-politics-b',
+          familyLabel: 'Cross-regional political instability family',
+          regions: ['United Kingdom'],
+          actorIds: ['actor-uk'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.48,
+          totalPressure: 0.5,
+          totalStabilization: 0.33,
+        },
+      ],
+      reportableInteractionLedger: [
+        {
+          sourceSituationId: 'sit-baltic',
+          targetSituationId: 'sit-blacksea-market',
+          sourceLabel: 'Baltic Sea supply chain situation',
+          targetLabel: 'Black Sea market situation',
+          strongestChannel: 'logistics_disruption',
+          interactionType: 'regional_spillover',
+          stage: 'round_1',
+          score: 2.5,
+          confidence: 0.76,
+          actorSpecificity: 0.84,
+          directLinkCount: 2,
+          sharedActor: false,
+          regionLink: true,
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+        },
+        {
+          sourceSituationId: 'sit-baltic',
+          targetSituationId: 'sit-blacksea-market',
+          sourceLabel: 'Baltic Sea supply chain situation',
+          targetLabel: 'Black Sea market situation',
+          strongestChannel: 'logistics_disruption',
+          interactionType: 'regional_spillover',
+          stage: 'round_2',
+          score: 2.4,
+          confidence: 0.78,
+          actorSpecificity: 0.84,
+          directLinkCount: 2,
+          sharedActor: false,
+          regionLink: true,
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+        },
+        {
+          sourceSituationId: 'sit-brazil-politics',
+          targetSituationId: 'sit-uk-politics',
+          sourceLabel: 'Brazil political situation',
+          targetLabel: 'United Kingdom political situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'spillover',
+          stage: 'round_1',
+          score: 5.2,
+          confidence: 0.75,
+          actorSpecificity: 0.79,
+          directLinkCount: 1,
+          sharedActor: true,
+          regionLink: false,
+          sourceActorName: 'Coalition bloc',
+          targetActorName: 'Policy team',
+        },
+        {
+          sourceSituationId: 'sit-brazil-politics',
+          targetSituationId: 'sit-uk-politics',
+          sourceLabel: 'Brazil political situation',
+          targetLabel: 'United Kingdom political situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'spillover',
+          stage: 'round_2',
+          score: 5.1,
+          confidence: 0.74,
+          actorSpecificity: 0.79,
+          directLinkCount: 1,
+          sharedActor: true,
+          regionLink: false,
+          sourceActorName: 'Coalition bloc',
+          targetActorName: 'Policy team',
+        },
+      ],
+    });
+
+    assert.equal(effects.length, 1);
+    assert.equal(effects[0].channel, 'logistics_disruption');
+    assert.ok(effects[0].confidence >= 0.5);
   });
 
   it('ignores incompatible prior simulation momentum when the simulation version changes', () => {
