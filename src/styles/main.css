@@ -20264,6 +20264,30 @@ body.has-breaking-alert .panels-grid {
   min-width: 70px;
 }
 
+.debt-load-more {
+  width: 100%;
+  padding: 8px;
+  margin: 4px 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.debt-load-more:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.debt-load-more-count {
+  opacity: 0.6;
+}
+
 .debt-footer {
   display: flex;
   justify-content: space-between;

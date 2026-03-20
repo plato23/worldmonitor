@@ -101,6 +101,8 @@ function sortEntries(entries: NationalDebtEntry[], mode: SortMode): NationalDebt
   return sorted;
 }
 
+const PAGE_SIZE = 20;
+
 export class NationalDebtPanel extends Panel {
   private entries: NationalDebtEntry[] = [];
   private filteredEntries: NationalDebtEntry[] = [];
@@ -108,6 +110,7 @@ export class NationalDebtPanel extends Panel {
   private searchQuery = '';
   private loading = false;
   private lastFetch = 0;
+  private visibleCount = PAGE_SIZE;
   private tickerInterval: ReturnType<typeof setInterval> | null = null;
   private readonly REFRESH_INTERVAL = 6 * 60 * 60 * 1000;
 
@@ -120,10 +123,18 @@ export class NationalDebtPanel extends Panel {
     });
 
     this.content.addEventListener('click', (e) => {
-      const tab = (e.target as HTMLElement).closest('[data-sort]') as HTMLElement | null;
+      const target = e.target as HTMLElement;
+      const tab = target.closest('[data-sort]') as HTMLElement | null;
       if (tab?.dataset.sort) {
         this.sortMode = tab.dataset.sort as SortMode;
+        this.visibleCount = PAGE_SIZE;
         this.applyFilters();
+        this.render();
+        this.restartTicker();
+        return;
+      }
+      if (target.closest('.debt-load-more')) {
+        this.visibleCount += PAGE_SIZE;
         this.render();
         this.restartTicker();
       }
@@ -133,6 +144,7 @@ export class NationalDebtPanel extends Panel {
       const target = e.target as HTMLInputElement;
       if (target.classList.contains('debt-search')) {
         this.searchQuery = target.value;
+        this.visibleCount = PAGE_SIZE;
         this.applyFilters();
         this.render();
         this.restartTicker();
@@ -227,8 +239,13 @@ export class NationalDebtPanel extends Panel {
           <input class="debt-search" type="text" placeholder="Search country..." value="${escapeHtml(this.searchQuery)}">
         </div>
         <div class="debt-list">
-          ${this.filteredEntries.slice(0, 100).map((entry, idx) => this.renderRow(entry, idx + 1)).join('')}
+          ${this.filteredEntries.slice(0, this.visibleCount).map((entry, idx) => this.renderRow(entry, idx + 1)).join('')}
         </div>
+        ${this.visibleCount < this.filteredEntries.length ? `
+        <button class="debt-load-more">
+          Load ${Math.min(PAGE_SIZE, this.filteredEntries.length - this.visibleCount)} more
+          <span class="debt-load-more-count">(${this.filteredEntries.length - this.visibleCount} remaining)</span>
+        </button>` : ''}
         <div class="debt-footer">
           <span class="debt-source">Source: IMF WEO 2024 + US Treasury FiscalData</span>
           <span class="debt-updated">Updated: ${new Date(this.lastFetch).toLocaleDateString()}</span>
@@ -279,7 +296,7 @@ export class NationalDebtPanel extends Panel {
       }
       const container = this.content.querySelector('.debt-list');
       if (!container) return;
-      for (const entry of this.filteredEntries.slice(0, 100)) {
+      for (const entry of this.filteredEntries.slice(0, this.visibleCount)) {
         const el = container.querySelector<HTMLElement>(`.debt-ticker[data-iso3="${entry.iso3}"]`);
         if (el) {
           el.textContent = formatDebt(getCurrentDebt(entry));

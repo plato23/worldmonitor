@@ -589,13 +589,25 @@ export type { NationalDebtEntry };
 // National Debt Clock
 // ========================================================================
 
-const nationalDebtBreaker = createCircuitBreaker<GetNationalDebtResponse>({ name: 'National Debt', cacheTtlMs: 6 * 60 * 60 * 1000, persistCache: true });
+// No persistCache: IndexedDB hydration on first call can deadlock in some browsers,
+// causing the panel to hang indefinitely on "Loading debt data from IMF..."
+const nationalDebtBreaker = createCircuitBreaker<GetNationalDebtResponse>({ name: 'National Debt', cacheTtlMs: 6 * 60 * 60 * 1000 });
 const emptyNationalDebtFallback: GetNationalDebtResponse = { entries: [], seededAt: '', unavailable: true };
 
 export async function getNationalDebtData(): Promise<GetNationalDebtResponse> {
   const hydrated = getHydratedData('nationalDebt') as GetNationalDebtResponse | undefined;
   if (hydrated?.entries?.length) return hydrated;
 
+  // Race all fetch paths against a hard 20s deadline so the panel never hangs.
+  return Promise.race([
+    _fetchNationalDebt(),
+    new Promise<GetNationalDebtResponse>(resolve =>
+      setTimeout(() => resolve(emptyNationalDebtFallback), 20_000),
+    ),
+  ]);
+}
+
+async function _fetchNationalDebt(): Promise<GetNationalDebtResponse> {
   try {
     const resp = await fetch(toApiUrl('/api/bootstrap?keys=nationalDebt'), {
       signal: AbortSignal.timeout(5_000),
@@ -608,7 +620,7 @@ export async function getNationalDebtData(): Promise<GetNationalDebtResponse> {
 
   try {
     return await nationalDebtBreaker.execute(async () => {
-      return client.getNationalDebt({}, { signal: AbortSignal.timeout(15_000) });
+      return client.getNationalDebt({}, { signal: AbortSignal.timeout(12_000) });
     }, emptyNationalDebtFallback);
   } catch {
     return emptyNationalDebtFallback;
