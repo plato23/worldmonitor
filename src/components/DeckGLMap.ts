@@ -5543,13 +5543,13 @@ export class DeckGLMap {
     if (!this.maplibreMap) return;
     try {
       if (!this.maplibreMap.getLayer('country-highlight-fill')) return;
-    } catch { return; }
-    const rest = this.getHighlightRestOpacity();
-    const noMatch = ['==', ['get', 'ISO3166-1-Alpha-2'], ''] as maplibregl.FilterSpecification;
-    this.maplibreMap.setFilter('country-highlight-fill', noMatch);
-    this.maplibreMap.setFilter('country-highlight-border', noMatch);
-    this.maplibreMap.setPaintProperty('country-highlight-fill', 'fill-opacity', rest.fill);
-    this.maplibreMap.setPaintProperty('country-highlight-border', 'line-opacity', rest.border);
+      const rest = this.getHighlightRestOpacity();
+      const noMatch = ['==', ['get', 'ISO3166-1-Alpha-2'], ''] as maplibregl.FilterSpecification;
+      this.maplibreMap.setFilter('country-highlight-fill', noMatch);
+      this.maplibreMap.setFilter('country-highlight-border', noMatch);
+      this.maplibreMap.setPaintProperty('country-highlight-fill', 'fill-opacity', rest.fill);
+      this.maplibreMap.setPaintProperty('country-highlight-border', 'line-opacity', rest.border);
+    } catch { /* style unloaded or map torn down between panel close and highlight clear */ }
   }
 
   private pulseCountryHighlight(): void {

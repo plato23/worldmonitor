@@ -244,6 +244,8 @@ Sentry.init({
     /args\.site\.enabledFeatures/,
     /can't access property "\w+", FONTS\[/,
     /^\w{1,2} is not a function\. \(In '\w{1,2}\(/,
+    /null is not an object \(evaluating '\w+\.magnitude\.toFixed'\)/,
+    /start offset of Int16Array should be a multiple of 2/,
   ],
   beforeSend(event) {
     const msg = event.exception?.values?.[0]?.value ?? '';
