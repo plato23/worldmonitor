@@ -318,7 +318,7 @@ paths:
             tags:
                 - EconomicService
             summary: ListGroceryBasketPrices
-            description: ListGroceryBasketPrices retrieves grocery basket price comparison across Middle East countries.
+            description: ListGroceryBasketPrices retrieves grocery basket price comparison across 24 countries worldwide.
             operationId: ListGroceryBasketPrices
             responses:
                 "200":
@@ -327,6 +327,32 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ListGroceryBasketPricesResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/economic/v1/list-bigmac-prices:
+        get:
+            tags:
+                - EconomicService
+            summary: ListBigMacPrices
+            description: ListBigMacPrices retrieves Big Mac Index prices across Middle East countries.
+            operationId: ListBigMacPrices
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListBigMacPricesResponse'
                 "400":
                     description: Validation error
                     content:
@@ -965,6 +991,45 @@ components:
                     format: double
                 currency:
                     type: string
+                sourceSite:
+                    type: string
+                available:
+                    type: boolean
+        ListBigMacPricesRequest:
+            type: object
+        ListBigMacPricesResponse:
+            type: object
+            properties:
+                countries:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/BigMacCountryPrice'
+                fetchedAt:
+                    type: string
+                cheapestCountry:
+                    type: string
+                mostExpensiveCountry:
+                    type: string
+        BigMacCountryPrice:
+            type: object
+            properties:
+                code:
+                    type: string
+                name:
+                    type: string
+                currency:
+                    type: string
+                flag:
+                    type: string
+                localPrice:
+                    type: number
+                    format: double
+                usdPrice:
+                    type: number
+                    format: double
+                fxRate:
+                    type: number
+                    format: double
                 sourceSite:
                     type: string
                 available:

@@ -13,4 +13,6 @@ export const SEED_ONLY_BOOTSTRAP_CACHE_KEYS = {
   techEvents: 'research:tech-events-bootstrap:v1',
   gdeltIntel: 'intelligence:gdelt-intel:v1',
   correlationCards: 'correlation:cards-bootstrap:v1',
+  groceryBasket: 'economic:grocery-basket:v1',
+  bigmac: 'economic:bigmac:v1',
 } as const;

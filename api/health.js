@@ -38,6 +38,7 @@ const BOOTSTRAP_KEYS = {
   sanctionsPressure: 'sanctions:pressure:v1',
   radiationWatch:    'radiation:observations:v1',
   groceryBasket:     'economic:grocery-basket:v1',
+  bigmac:            'economic:bigmac:v1',
 };
 
 const STANDALONE_KEYS = {
@@ -137,6 +138,7 @@ const SEED_META = {
   sanctionsPressure:   { key: 'seed-meta:sanctions:pressure',                 maxStaleMin: 720 },
   radiationWatch:      { key: 'seed-meta:radiation:observations',             maxStaleMin: 30 },
   groceryBasket:       { key: 'seed-meta:economic:grocery-basket',            maxStaleMin: 360 },
+  bigmac:              { key: 'seed-meta:economic:bigmac',                    maxStaleMin: 1440 },
   thermalEscalation:   { key: 'seed-meta:thermal:escalation',                 maxStaleMin: 240 },
   tariffTrendsUs:      { key: 'seed-meta:trade:tariffs:v1:840:all:10',        maxStaleMin: 900 },
 };
