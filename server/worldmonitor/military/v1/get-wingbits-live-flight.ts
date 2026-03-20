@@ -39,6 +39,7 @@ interface PlanespottersPhoto {
 }
 
 interface EcsFlightRaw {
+  // Full-name fields (details/enrichment endpoint)
   icao24?: string;
   callsign?: string;
   lat?: number;
@@ -55,23 +56,35 @@ interface EcsFlightRaw {
   on_ground?: boolean;
   lastSeen?: number;
   last_seen?: number;
+  // Abbreviated fields returned by the live position endpoint
+  h?: string;   // icao24
+  f?: string;   // callsign
+  la?: number;  // lat
+  lo?: number;  // lon
+  ab?: number;  // altitude (barometric, feet)
+  gs?: number;  // ground speed (knots)
+  tr?: number;  // track/heading (degrees)
+  rs?: number;  // vertical rate (ft/min)
+  og?: boolean; // on ground
+  ra?: string;  // last seen (ISO timestamp)
 }
 
 function mapEcsFlight(icao24: string, raw: EcsFlightRaw): WingbitsLiveFlight {
+  const lastSeenTs = raw.lastSeen ?? raw.last_seen ?? (raw.ra ? Math.floor(new Date(raw.ra).getTime() / 1000) : 0);
   return {
-    icao24,
-    callsign: raw.callsign ?? '',
-    lat: raw.lat ?? 0,
-    lon: raw.lon ?? 0,
-    altitude: raw.altitude ?? 0,
-    speed: raw.speed ?? 0,
-    heading: raw.heading ?? 0,
-    verticalRate: raw.verticalRate ?? raw.vertical_rate ?? 0,
+    icao24: raw.icao24 ?? raw.h ?? icao24,
+    callsign: raw.callsign ?? raw.f ?? '',
+    lat: raw.lat ?? raw.la ?? 0,
+    lon: raw.lon ?? raw.lo ?? 0,
+    altitude: raw.altitude ?? raw.ab ?? 0,
+    speed: raw.speed ?? raw.gs ?? 0,
+    heading: raw.heading ?? raw.tr ?? 0,
+    verticalRate: raw.verticalRate ?? raw.vertical_rate ?? raw.rs ?? 0,
     registration: raw.registration ?? '',
     model: raw.model ?? '',
     operator: raw.operator ?? '',
-    onGround: raw.onGround ?? raw.on_ground ?? false,
-    lastSeen: String(raw.lastSeen ?? raw.last_seen ?? 0),
+    onGround: raw.onGround ?? raw.on_ground ?? raw.og ?? false,
+    lastSeen: String(lastSeenTs),
     // Schedule fields — populated later by fetchSchedule
     depIata: '', arrIata: '', depTimeUtc: '', arrTimeUtc: '',
     depEstimatedUtc: '', arrEstimatedUtc: '', depDelayedMin: 0,

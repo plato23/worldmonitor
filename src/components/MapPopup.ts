@@ -939,9 +939,7 @@ export class MapPopup {
 
       const statsHtml = rows.length > 0 ? `<div class="popup-stats">${rows.join('')}</div>` : '';
       section.innerHTML = `
-        <div class="popup-section-label" style="font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:.05em;margin-top:8px">
-          <a href="https://wingbits.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">wingbits.com</a>
-        </div>
+        <div class="popup-section-label" style="font-size:10px;opacity:0.5;text-transform:uppercase;letter-spacing:.05em;margin-top:8px">Live Data</div>
         ${parts.join('')}
         ${statsHtml}
       `;
