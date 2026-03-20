@@ -10,22 +10,24 @@ const CANONICAL_KEY = 'economic:grocery-basket:v1';
 const CACHE_TTL = 21600; // 6h
 const EXA_DELAY_MS = 150;
 
-// Hardcoded FX fallbacks for pegged/stable currencies
+// Hardcoded FX fallbacks — used when Yahoo Finance returns null/zero
 const FX_FALLBACKS = {
-  AED: 0.2723,
-  SAR: 0.2666,
-  QAR: 0.2747,
-  KWD: 3.2520,
-  BHD: 2.6525,
-  OMR: 2.5974,
-  JOD: 1.4104,
-  EGP: 0.0204,
-  LBP: 0.0000112,
+  // Middle East (pegged)
+  AED: 0.2723, SAR: 0.2666, QAR: 0.2747, KWD: 3.2520,
+  BHD: 2.6525, OMR: 2.5974, JOD: 1.4104, EGP: 0.0192, LBP: 0.0000112,
+  // Major currencies
+  USD: 1.0000, GBP: 1.2700, EUR: 1.0850, JPY: 0.0067,
+  CNY: 0.1380, INR: 0.0120, AUD: 0.6500, CAD: 0.7400,
+  BRL: 0.1900, MXN: 0.0490, ZAR: 0.0540, TRY: 0.0290,
+  KRW: 0.0007, SGD: 0.7400, PKR: 0.0036,
+  // Emerging
+  NGN: 0.00062, KES: 0.0077, ARS: 0.00084, IDR: 0.000063, PHP: 0.0173,
 };
 
 async function fetchFxRates() {
   const rates = {};
   for (const [currency, symbol] of Object.entries(config.fxSymbols)) {
+    if (currency === 'USD') { rates['USD'] = 1.0; continue; } // USD is the base
     try {
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;
       const resp = await fetch(url, {
@@ -83,10 +85,11 @@ async function searchExa(query) {
   return resp.json();
 }
 
-// Match price + currency together — never discard the currency code
+// All supported currency codes — keep in sync with grocery-basket.json fxSymbols
+const CCY = 'USD|GBP|EUR|JPY|CNY|INR|AUD|CAD|BRL|MXN|ZAR|TRY|NGN|KRW|SGD|PKR|AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|KES|ARS|IDR|PHP';
 const PRICE_PATTERNS = [
-  /(\d+(?:\.\d{1,3})?)\s*(AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|USD)/i,
-  /(AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|USD)\s*(\d+(?:\.\d{1,3})?)/i,
+  new RegExp(`(\\d+(?:\\.\\d{1,3})?)\\s*(${CCY})`, 'i'),
+  new RegExp(`(${CCY})\\s*(\\d+(?:\\.\\d{1,3})?)`, 'i'),
 ];
 
 function matchPrice(text, url) {

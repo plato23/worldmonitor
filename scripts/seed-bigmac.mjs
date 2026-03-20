@@ -120,11 +120,10 @@ async function fetchBigMacPrices() {
       const query = `Big Mac price ${country.name} ${country.currency}`;
       const SPECIALIST_SITES = ['theburgerindex.com', 'eatmyindex.com'];
 
-      // Tier 1: specialist Big Mac Index sites (clean, verified per-country data)
-      let exaResult = await searchExa(query, SPECIALIST_SITES);
+      // Specialist Big Mac Index sites only — clean, verified per-country data
+      const exaResult = await searchExa(query, SPECIALIST_SITES);
       await sleep(EXA_DELAY_MS);
 
-      // Extract from tier 1 — local currency only
       if (exaResult?.results?.length) {
         for (const result of exaResult.results) {
           const summary = result?.summary;
@@ -137,42 +136,6 @@ async function fetchBigMacPrices() {
           }
         }
       }
-
-      // Tier 2: no local currency found on specialist sites — fall back to open search
-      if (localPrice === null) {
-        console.log(`    (no local price from specialist sites — open search)`);
-        exaResult = await searchExa(`McDonald's Big Mac price ${country.name}`, null);
-        await sleep(EXA_DELAY_MS);
-
-        // Exclude ranking/average pages — they report global stats not country-specific prices
-        const EXCLUDED_URLS = ['numbeo.com/cost-of-living/country_price_rankings', 'expatistan.com'];
-        const usableResults = (exaResult?.results || []).filter(r =>
-          !EXCLUDED_URLS.some(ex => (r.url || '').includes(ex))
-        );
-
-        if (usableResults.length) {
-          let usdFallback = null;
-          for (const result of usableResults) {
-            const summary = result?.summary;
-            if (!summary || typeof summary !== 'string') continue;
-            const hit = matchPrice(summary, result.url || '');
-            if (!hit) continue;
-            if (hit.currency === country.currency) {
-              localPrice = hit.price;
-              sourceSite = hit.source;
-              break;
-            }
-            if (hit.currency === 'USD' && usdFallback === null) {
-              usdFallback = { price: hit.price, source: hit.source };
-            }
-          }
-          if (localPrice === null && usdFallback !== null) {
-            usdPrice = +usdFallback.price.toFixed(4);
-            sourceSite = usdFallback.source;
-            console.log(`    (USD source: ${sourceSite})`);
-          }
-        }
-      }
     } catch (err) {
       console.warn(`    [${country.code}] EXA error: ${err.message}`);
     }
@@ -180,9 +143,7 @@ async function fetchBigMacPrices() {
     if (usdPrice === null) {
       usdPrice = localPrice !== null && fxRate ? +(localPrice * fxRate).toFixed(4) : null;
     }
-    const status = localPrice !== null
-      ? `${localPrice} ${country.currency} = $${usdPrice}`
-      : usdPrice !== null ? `$${usdPrice} (USD source)` : 'N/A';
+    const status = localPrice !== null ? `${localPrice} ${country.currency} = $${usdPrice}` : 'N/A';
     console.log(`    Big Mac: ${status}`);
 
     results.push({
