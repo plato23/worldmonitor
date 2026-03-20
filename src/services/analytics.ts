@@ -47,7 +47,8 @@ export function trackCountryBriefOpened(countryCode: string): void {
 }
 
 export function trackMapLayerToggle(layerId: string, enabled: boolean, source: 'user' | 'programmatic'): void {
-  window.umami?.track('map-layer-toggle', { layerId, enabled, source });
+  if (source !== 'user') return;
+  window.umami?.track('map-layer-toggle', { layerId, enabled });
 }
 
 export function trackMapViewChange(view: string): void {
