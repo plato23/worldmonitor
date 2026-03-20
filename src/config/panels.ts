@@ -2,6 +2,8 @@ import type { PanelConfig, MapLayers, DataSourceId } from '@/types';
 import { SITE_VARIANT } from './variant';
 // boundary-ignore: isDesktopRuntime is a pure env probe with no service dependencies
 import { isDesktopRuntime } from '@/services/runtime';
+// boundary-ignore: getSecretState is a pure env/keychain probe with no service dependencies
+import { getSecretState } from '@/services/runtime-config';
 
 const _desktop = isDesktopRuntime();
 
@@ -72,6 +74,7 @@ const FULL_PANELS: Record<string, PanelConfig> = {
   'airline-intel': { name: 'Airline Intelligence', enabled: true, priority: 2 },
   'tech-readiness': { name: 'Tech Readiness Index', enabled: true, priority: 2 },
   'world-clock': { name: 'World Clock', enabled: true, priority: 2 },
+  'national-debt': { name: 'National Debt Clock', enabled: true, priority: 2 },
 };
 
 const FULL_MAP_LAYERS: MapLayers = {
@@ -384,6 +387,10 @@ const FINANCE_PANELS: Record<string, PanelConfig> = {
   'commodities-news': { name: 'Commodities News', enabled: true, priority: 2 },
   crypto: { name: 'Crypto & Digital Assets', enabled: true, priority: 1 },
   'crypto-news': { name: 'Crypto News', enabled: true, priority: 2 },
+  'crypto-heatmap': { name: 'Crypto Sectors', enabled: true, priority: 1 },
+  'defi-tokens': { name: 'DeFi Tokens', enabled: true, priority: 2 },
+  'ai-tokens': { name: 'AI Tokens', enabled: true, priority: 2 },
+  'other-tokens': { name: 'Alt Tokens', enabled: true, priority: 2 },
   centralbanks: { name: 'Central Bank Watch', enabled: true, priority: 1 },
   economic: { name: 'Macro Stress', enabled: true, priority: 1 },
   'trade-policy': { name: 'Trade Policy', enabled: true, priority: 1 },
@@ -824,17 +831,87 @@ const COMMODITY_MOBILE_MAP_LAYERS: MapLayers = {
 };
 
 // ============================================
+// UNIFIED PANEL REGISTRY
+// ============================================
+
+/** All panels from all variants — union with FULL taking precedence for duplicate keys. */
+export const ALL_PANELS: Record<string, PanelConfig> = {
+  ...HAPPY_PANELS,
+  ...COMMODITY_PANELS,
+  ...TECH_PANELS,
+  ...FINANCE_PANELS,
+  ...FULL_PANELS,
+};
+
+/** Per-variant canonical panel order (keys = which panels are enabled by default). */
+export const VARIANT_DEFAULTS: Record<string, string[]> = {
+  full:      Object.keys(FULL_PANELS),
+  tech:      Object.keys(TECH_PANELS),
+  finance:   Object.keys(FINANCE_PANELS),
+  commodity: Object.keys(COMMODITY_PANELS),
+  happy:     Object.keys(HAPPY_PANELS),
+};
+
+/**
+ * Variant-specific label overrides for panels shared across variants.
+ * Applied at render time, not just at seed time.
+ */
+export const VARIANT_PANEL_OVERRIDES: Partial<Record<string, Partial<Record<string, Partial<PanelConfig>>>>> = {
+  finance: {
+    map:         { name: 'Global Markets Map' },
+    'live-news': { name: 'Market Headlines' },
+    insights:    { name: 'AI Market Insights' },
+  },
+  tech: {
+    map:         { name: 'Global Tech Map' },
+    'live-news': { name: 'Tech Headlines' },
+    insights:    { name: 'AI Insights' },
+  },
+  commodity: {
+    map:         { name: 'Commodity Map' },
+    'live-news': { name: 'Commodity Headlines' },
+    insights:    { name: 'AI Commodity Insights' },
+  },
+  happy: {
+    map:         { name: 'World Map' },
+  },
+};
+
+/**
+ * Returns the effective panel config for a given key and variant,
+ * applying variant-specific display overrides (name, premium, etc.).
+ */
+export function getEffectivePanelConfig(key: string, variant: string): PanelConfig {
+  const base = ALL_PANELS[key];
+  if (!base) return { name: key, enabled: false, priority: 2 };
+  const override = VARIANT_PANEL_OVERRIDES[variant]?.[key] ?? {};
+  return { ...base, ...override };
+}
+
+/**
+ * Returns true if the current user is entitled to enable/view this panel.
+ * Mirrors the entitlement checks in panel-layout.ts (single source of truth).
+ */
+export function isPanelEntitled(key: string, config: PanelConfig): boolean {
+  if (!config.premium) return true;
+  const apiKeyPanels = ['stock-analysis', 'stock-backtest', 'daily-market-brief'];
+  if (apiKeyPanels.includes(key)) {
+    return getSecretState('WORLDMONITOR_API_KEY').present;
+  }
+  if (config.premium === 'locked') {
+    return isDesktopRuntime();
+  }
+  return true;
+}
+
+// ============================================
 // VARIANT-AWARE EXPORTS
 // ============================================
-export const DEFAULT_PANELS = SITE_VARIANT === 'happy' 
-  ? HAPPY_PANELS 
-  : SITE_VARIANT === 'tech' 
-    ? TECH_PANELS 
-    : SITE_VARIANT === 'finance' 
-      ? FINANCE_PANELS 
-      : SITE_VARIANT === 'commodity'
-        ? COMMODITY_PANELS
-        : FULL_PANELS;
+export const DEFAULT_PANELS: Record<string, PanelConfig> = Object.fromEntries(
+  (VARIANT_DEFAULTS[SITE_VARIANT] ?? VARIANT_DEFAULTS['full'] ?? []).map(key =>
+    [key, getEffectivePanelConfig(key, SITE_VARIANT)]
+  )
+);
 
 export const DEFAULT_MAP_LAYERS = SITE_VARIANT === 'happy' 
   ? HAPPY_MAP_LAYERS 
@@ -873,13 +950,11 @@ export const LAYER_TO_SOURCE: Partial<Record<keyof MapLayers, DataSourceId[]>> =
 };
 
 // ============================================
-// PANEL CATEGORY MAP (variant-aware)
+// PANEL CATEGORY MAP
 // ============================================
 // Maps category keys to panel keys. Only categories with at least one
-// matching panel in the active variant's DEFAULT_PANELS are shown.
-// The `variants` field restricts a category to specific site variants;
-// omit it to show the category for all variants.
-export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: string[]; variants?: string[] }> = {
+// matching panel in the user's active panel settings are shown.
+export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: string[] }> = {
   // All variants — essential panels
   core: {
     labelKey: 'header.panelCatCore',
@@ -890,120 +965,98 @@ export const PANEL_CATEGORY_MAP: Record<string, { labelKey: string; panelKeys: s
   intelligence: {
     labelKey: 'header.panelCatIntelligence',
     panelKeys: ['cii', 'strategic-risk', 'intel', 'gdelt-intel', 'cascade', 'telegram-intel', 'forecast'],
-    variants: ['full'],
   },
   correlation: {
     labelKey: 'header.panelCatCorrelation',
     panelKeys: ['military-correlation', 'escalation-correlation', 'economic-correlation', 'disaster-correlation'],
-    variants: ['full'],
   },
   regionalNews: {
     labelKey: 'header.panelCatRegionalNews',
     panelKeys: ['politics', 'us', 'europe', 'middleeast', 'africa', 'latam', 'asia'],
-    variants: ['full'],
   },
   marketsFinance: {
     labelKey: 'header.panelCatMarketsFinance',
     panelKeys: ['commodities', 'energy-complex', 'markets', 'economic', 'trade-policy', 'sanctions-pressure', 'supply-chain', 'finance', 'polymarket', 'macro-signals', 'gulf-economies', 'etf-flows', 'stablecoins', 'crypto', 'heatmap'],
-    variants: ['full'],
   },
   topical: {
     labelKey: 'header.panelCatTopical',
     panelKeys: ['energy', 'gov', 'thinktanks', 'tech', 'ai', 'layoffs'],
-    variants: ['full'],
   },
   dataTracking: {
     labelKey: 'header.panelCatDataTracking',
     panelKeys: ['monitors', 'satellite-fires', 'ucdp-events', 'displacement', 'climate', 'population-exposure', 'security-advisories', 'radiation-watch', 'oref-sirens', 'world-clock', 'tech-readiness'],
-    variants: ['full'],
   },
 
   // Tech variant
   techAi: {
     labelKey: 'header.panelCatTechAi',
     panelKeys: ['ai', 'tech', 'hardware', 'cloud', 'dev', 'github', 'producthunt', 'events', 'service-status', 'tech-readiness'],
-    variants: ['tech'],
   },
   startupsVc: {
     labelKey: 'header.panelCatStartupsVc',
     panelKeys: ['startups', 'vcblogs', 'regionalStartups', 'unicorns', 'accelerators', 'funding', 'ipo'],
-    variants: ['tech'],
   },
   securityPolicy: {
     labelKey: 'header.panelCatSecurityPolicy',
     panelKeys: ['security', 'policy', 'regulation'],
-    variants: ['tech'],
   },
   techMarkets: {
     labelKey: 'header.panelCatMarkets',
     panelKeys: ['markets', 'finance', 'crypto', 'economic', 'sanctions-pressure', 'polymarket', 'macro-signals', 'etf-flows', 'stablecoins', 'layoffs', 'monitors', 'world-clock'],
-    variants: ['tech'],
   },
 
   // Finance variant
   finMarkets: {
     labelKey: 'header.panelCatMarkets',
     panelKeys: ['markets', 'stock-analysis', 'stock-backtest', 'daily-market-brief', 'markets-news', 'heatmap', 'macro-signals', 'analysis', 'polymarket'],
-    variants: ['finance'],
   },
   fixedIncomeFx: {
     labelKey: 'header.panelCatFixedIncomeFx',
     panelKeys: ['forex', 'bonds'],
-    variants: ['finance'],
   },
   finCommodities: {
     labelKey: 'header.panelCatCommodities',
     panelKeys: ['commodities', 'energy-complex', 'commodities-news'],
-    variants: ['finance'],
   },
   cryptoDigital: {
     labelKey: 'header.panelCatCryptoDigital',
-    panelKeys: ['crypto', 'crypto-news', 'etf-flows', 'stablecoins', 'fintech'],
-    variants: ['finance'],
+    panelKeys: ['crypto', 'crypto-heatmap', 'defi-tokens', 'ai-tokens', 'other-tokens', 'crypto-news', 'etf-flows', 'stablecoins', 'fintech'],
   },
   centralBanksEcon: {
     labelKey: 'header.panelCatCentralBanks',
     panelKeys: ['centralbanks', 'economic', 'energy-complex', 'trade-policy', 'sanctions-pressure', 'supply-chain', 'economic-news'],
-    variants: ['finance'],
   },
   dealsInstitutional: {
     labelKey: 'header.panelCatDeals',
     panelKeys: ['ipo', 'derivatives', 'institutional', 'regulation'],
-    variants: ['finance'],
   },
   gulfMena: {
     labelKey: 'header.panelCatGulfMena',
     panelKeys: ['gulf-economies', 'gcc-investments', 'gccNews', 'monitors', 'world-clock'],
-    variants: ['finance'],
   },
 
   // Commodity variant
   commodityPrices: {
     labelKey: 'header.panelCatCommodityPrices',
     panelKeys: ['commodities', 'energy-complex', 'gold-silver', 'energy', 'base-metals', 'critical-minerals', 'markets', 'heatmap', 'macro-signals'],
-    variants: ['commodity'],
   },
   miningIndustry: {
     labelKey: 'header.panelCatMining',
     panelKeys: ['commodity-news', 'mining-news', 'mining-companies', 'supply-chain', 'commodity-regulation'],
-    variants: ['commodity'],
   },
   commodityEcon: {
     labelKey: 'header.panelCatCommodityEcon',
     panelKeys: ['trade-policy', 'sanctions-pressure', 'economic', 'gulf-economies', 'gcc-investments', 'finance', 'polymarket', 'airline-intel', 'world-clock', 'monitors'],
-    variants: ['commodity'],
   },
 
   // Happy variant
   happyNews: {
     labelKey: 'header.panelCatHappyNews',
     panelKeys: ['positive-feed', 'progress', 'counters', 'spotlight', 'breakthroughs', 'digest'],
-    variants: ['happy'],
   },
   happyPlanet: {
     labelKey: 'header.panelCatHappyPlanet',
     panelKeys: ['species', 'renewable', 'giving'],
-    variants: ['happy'],
   },
 };
 

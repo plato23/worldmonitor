@@ -8,6 +8,7 @@ import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 
 import { getStreamQuality } from '@/services/ai-flow-settings';
 import { getLiveStreamsAlwaysOn, subscribeLiveStreamsSettingsChange } from '@/services/live-stream-settings';
+import { track } from '@/services/analytics';
 
 // YouTube IFrame Player API types
 type YouTubePlayer = {
@@ -754,6 +755,7 @@ export class LiveNewsPanel extends Panel {
     this.fullscreenBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
     this.fullscreenBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      track('live-news-fullscreen', { entering: !this.isFullscreen });
       this.toggleFullscreen();
     });
     const header = this.element.querySelector('.panel-header');
@@ -1338,7 +1340,15 @@ export class LiveNewsPanel extends Panel {
     const storageObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
-          if (node instanceof HTMLIFrameElement && node.src.includes('youtube.com')) {
+          if (node instanceof HTMLIFrameElement) {
+            let isYouTube = false;
+            try {
+              const parsed = new URL(node.src);
+              isYouTube = parsed.hostname === 'youtube.com' || parsed.hostname.endsWith('.youtube.com');
+            } catch {
+              isYouTube = false;
+            }
+            if (!isYouTube) continue;
             const cur = node.getAttribute('allow') || '';
             if (!cur.includes('storage-access')) {
               node.setAttribute('allow', cur ? `${cur}; storage-access` : 'storage-access');

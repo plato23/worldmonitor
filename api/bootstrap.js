@@ -36,8 +36,12 @@ const BOOTSTRAP_CACHE_KEYS = {
   flightDelays: 'aviation:delays-bootstrap:v1',
   insights: 'news:insights:v1',
   predictions: 'prediction:markets-bootstrap:v1',
-  cryptoQuotes: 'market:crypto:v1',
-  gulfQuotes: 'market:gulf-quotes:v1',
+  cryptoQuotes:     'market:crypto:v1',
+  cryptoSectors:    'market:crypto-sectors:v1',
+  defiTokens:       'market:defi-tokens:v1',
+  aiTokens:         'market:ai-tokens:v1',
+  otherTokens:      'market:other-tokens:v1',
+  gulfQuotes:       'market:gulf-quotes:v1',
   stablecoinMarkets: 'market:stablecoins:v1',
   unrestEvents: 'unrest:events:v1',
   iranEvents: 'conflict:iran-events:v1',
@@ -54,6 +58,7 @@ const BOOTSTRAP_CACHE_KEYS = {
   sanctionsPressure: 'sanctions:pressure:v1',
   groceryBasket: 'economic:grocery-basket:v1',
   bigmac:        'economic:bigmac:v1',
+  nationalDebt:      'economic:national-debt:v1',
 };
 
 const SLOW_KEYS = new Set([
@@ -62,13 +67,15 @@ const SLOW_KEYS = new Set([
   'radiationWatch', 'thermalEscalation',
   'cyberThreats', 'techReadiness', 'progressData', 'renewableEnergy',
   'naturalEvents',
-  'cryptoQuotes', 'gulfQuotes', 'stablecoinMarkets', 'unrestEvents', 'ucdpEvents',
+  'cryptoQuotes', 'cryptoSectors', 'defiTokens', 'aiTokens', 'otherTokens',
+  'gulfQuotes', 'stablecoinMarkets', 'unrestEvents', 'ucdpEvents',
   'techEvents',
   'securityAdvisories',
   'customsRevenue',
   'sanctionsPressure',
   'groceryBasket',
   'bigmac',
+  'nationalDebt',
 ]);
 const FAST_KEYS = new Set([
   'earthquakes', 'outages', 'serviceStatuses', 'macroSignals', 'chokepoints', 'chokepointTransits',

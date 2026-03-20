@@ -1,6 +1,6 @@
 import { Panel } from './Panel';
 import { t } from '@/services/i18n';
-import type { MarketData, CryptoData } from '@/types';
+import type { MarketData, CryptoData, TokenData } from '@/types';
 import { formatPrice, formatChange, getChangeClass, getHeatmapClass } from '@/utils';
 import { escapeHtml } from '@/utils/sanitize';
 import { miniSparkline } from '@/utils/sparkline';
@@ -228,5 +228,82 @@ export class CryptoPanel extends Panel {
       .join('');
 
     this.setContent(html);
+  }
+}
+
+export class CryptoHeatmapPanel extends Panel {
+  constructor() {
+    super({ id: 'crypto-heatmap', title: 'Crypto Sectors' });
+  }
+
+  public renderSectors(data: Array<{ id: string; name: string; change: number }>): void {
+    if (data.length === 0) {
+      this.showRetrying(t('common.failedSectorData'));
+      return;
+    }
+
+    const html =
+      '<div class="heatmap">' +
+      data
+        .map((sector) => {
+          const change = sector.change ?? 0;
+          return `
+        <div class="heatmap-cell ${getHeatmapClass(change)}">
+          <div class="sector-name">${escapeHtml(sector.name)}</div>
+          <div class="sector-change ${getChangeClass(change)}">${formatChange(change)}</div>
+        </div>
+      `;
+        })
+        .join('') +
+      '</div>';
+
+    this.setContent(html);
+  }
+}
+
+export class TokenListPanel extends Panel {
+  public renderTokens(data: TokenData[]): void {
+    if (data.length === 0) {
+      this.showRetrying(t('common.failedCryptoData'));
+      return;
+    }
+
+    const rows = data
+      .map(
+        (tok) => `
+      <div class="market-item">
+        <div class="market-info">
+          <span class="market-name">${escapeHtml(tok.name)}</span>
+          <span class="market-symbol">${escapeHtml(tok.symbol)}</span>
+        </div>
+        <div class="market-data">
+          <span class="market-price">$${tok.price.toLocaleString(undefined, { maximumFractionDigits: tok.price < 1 ? 6 : 2 })}</span>
+          <span class="market-change ${getChangeClass(tok.change24h)}">${formatChange(tok.change24h)}</span>
+          <span class="market-change market-change--7d ${getChangeClass(tok.change7d)}">${formatChange(tok.change7d)}W</span>
+        </div>
+      </div>
+    `
+      )
+      .join('');
+
+    this.setContent(rows);
+  }
+}
+
+export class DefiTokensPanel extends TokenListPanel {
+  constructor() {
+    super({ id: 'defi-tokens', title: 'DeFi Tokens' });
+  }
+}
+
+export class AiTokensPanel extends TokenListPanel {
+  constructor() {
+    super({ id: 'ai-tokens', title: 'AI Tokens' });
+  }
+}
+
+export class OtherTokensPanel extends TokenListPanel {
+  constructor() {
+    super({ id: 'other-tokens', title: 'Alt Tokens' });
   }
 }

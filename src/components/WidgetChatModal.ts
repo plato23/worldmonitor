@@ -4,6 +4,7 @@ import { t } from '@/services/i18n';
 import { escapeHtml } from '@/utils/sanitize';
 import { widgetAgentHealthUrl, widgetAgentUrl } from '@/utils/proxy';
 import { wrapWidgetHtml, wrapProWidgetHtml } from '@/utils/widget-sanitizer';
+import { track } from '@/services/analytics';
 
 interface WidgetChatOptions {
   mode: 'create' | 'modify';
@@ -42,6 +43,7 @@ let clientTimeout: ReturnType<typeof setTimeout> | null = null;
 
 export function openWidgetChatModal(options: WidgetChatOptions): void {
   closeWidgetChatModal();
+  track('widget-ai-open', { panelId: options.existingSpec?.id });
 
   const currentTier: 'basic' | 'pro' = options.tier ?? options.existingSpec?.tier ?? 'basic';
   const isPro = currentTier === 'pro';
@@ -186,6 +188,7 @@ export function openWidgetChatModal(options: WidgetChatOptions): void {
   const submit = async () => {
     const prompt = inputEl.value.trim();
     if (!prompt || sendBtn.disabled) return;
+    track('widget-ai-generate');
 
     inputEl.value = '';
     requestInFlight = true;
@@ -276,6 +279,7 @@ export function openWidgetChatModal(options: WidgetChatOptions): void {
           } else if (event.type === 'done') {
             resultTitle = String(event.title ?? 'Custom Widget');
             radarEl.remove();
+            track('widget-ai-success', { title: resultTitle });
             const assistantSummary = t('widgets.generatedWidget', { title: resultTitle });
             sessionHistory.push(
               { role: 'user' as const, content: prompt },

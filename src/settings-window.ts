@@ -3,7 +3,8 @@
  * Loaded when the app is opened with ?settings=1 (e.g. from the main window's Settings button).
  */
 import type { PanelConfig } from '@/types';
-import { DEFAULT_PANELS, STORAGE_KEYS } from '@/config';
+import { DEFAULT_PANELS, STORAGE_KEYS, ALL_PANELS, VARIANT_DEFAULTS, getEffectivePanelConfig, isPanelEntitled } from '@/config';
+import { SITE_VARIANT } from '@/config/variant';
 import { loadFromStorage, saveToStorage } from '@/utils';
 import { t } from '@/services/i18n';
 import { escapeHtml } from '@/utils/sanitize';
@@ -30,6 +31,12 @@ export function initSettingsWindow(): void {
     STORAGE_KEYS.panels,
     DEFAULT_PANELS
   );
+  const variantDefaults = new Set(VARIANT_DEFAULTS[SITE_VARIANT] ?? []);
+  for (const key of Object.keys(ALL_PANELS)) {
+    if (!(key in panelSettings)) {
+      panelSettings[key] = { ...getEffectivePanelConfig(key, SITE_VARIANT), enabled: variantDefaults.has(key) };
+    }
+  }
 
   const isDesktopApp = isDesktopRuntime();
 
@@ -56,6 +63,7 @@ export function initSettingsWindow(): void {
           const panelKey = (item as HTMLElement).dataset.panel!;
           const config = panelSettings[panelKey];
           if (config) {
+            if (!config.enabled && !isPanelEntitled(panelKey, ALL_PANELS[panelKey] ?? config)) return;
             config.enabled = !config.enabled;
             saveToStorage(STORAGE_KEYS.panels, panelSettings);
             render();

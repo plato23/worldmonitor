@@ -39,6 +39,7 @@ const BOOTSTRAP_KEYS = {
   radiationWatch:    'radiation:observations:v1',
   groceryBasket:     'economic:grocery-basket:v1',
   bigmac:            'economic:bigmac:v1',
+  nationalDebt:      'economic:national-debt:v1',
 };
 
 const STANDALONE_KEYS = {
@@ -83,16 +84,16 @@ const SEED_META = {
   wildfires:        { key: 'seed-meta:wildfire:fires',          maxStaleMin: 120 },
   outages:          { key: 'seed-meta:infra:outages',           maxStaleMin: 30 },
   climateAnomalies: { key: 'seed-meta:climate:anomalies',       maxStaleMin: 120 },
-  unrestEvents:     { key: 'seed-meta:unrest:events',           maxStaleMin: 45 },
+  unrestEvents:     { key: 'seed-meta:unrest:events',           maxStaleMin: 75 },
   cyberThreats:     { key: 'seed-meta:cyber:threats',           maxStaleMin: 480 },
   cryptoQuotes:     { key: 'seed-meta:market:crypto',           maxStaleMin: 30 },
   etfFlows:         { key: 'seed-meta:market:etf-flows',        maxStaleMin: 60 },
   gulfQuotes:       { key: 'seed-meta:market:gulf-quotes',      maxStaleMin: 30 },
   stablecoinMarkets:{ key: 'seed-meta:market:stablecoins',      maxStaleMin: 60 },
-  naturalEvents:    { key: 'seed-meta:natural:events',          maxStaleMin: 120 },
-  flightDelays:     { key: 'seed-meta:aviation:faa',            maxStaleMin: 60 },
+  naturalEvents:    { key: 'seed-meta:natural:events',          maxStaleMin: 360 }, // 2h cron; 3x interval; was 120 (TTL was 60min — panel went dark before health alarmed)
+  flightDelays:     { key: 'seed-meta:aviation:faa',            maxStaleMin: 90 }, // CACHE_TTL=7200s; matches notamClosures from same cron
   notamClosures:    { key: 'seed-meta:aviation:notam',          maxStaleMin: 90 },
-  predictions:      { key: 'seed-meta:prediction:markets',      maxStaleMin: 30 },
+  predictions:      { key: 'seed-meta:prediction:markets',      maxStaleMin: 90 },
   insights:         { key: 'seed-meta:news:insights',           maxStaleMin: 30 },
   marketQuotes:     { key: 'seed-meta:market:stocks',         maxStaleMin: 30 },
   commodityQuotes:  { key: 'seed-meta:market:commodities',    maxStaleMin: 30 },
@@ -125,7 +126,7 @@ const SEED_META = {
   progressData:     { key: 'seed-meta:economic:worldbank-progress:v1',     maxStaleMin: 10080 },
   renewableEnergy:  { key: 'seed-meta:economic:worldbank-renewable:v1',    maxStaleMin: 10080 },
   intlDelays:       { key: 'seed-meta:aviation:intl',           maxStaleMin: 90 },
-  faaDelays:        { key: 'seed-meta:aviation:faa',            maxStaleMin: 60 },
+  faaDelays:        { key: 'seed-meta:aviation:faa',            maxStaleMin: 90 }, // same key as flightDelays; CACHE_TTL=7200s
   theaterPosture:   { key: 'seed-meta:theater-posture',         maxStaleMin: 60 },
   correlationCards: { key: 'seed-meta:correlation:cards',       maxStaleMin: 15 },
   portwatch:           { key: 'seed-meta:supply_chain:portwatch',            maxStaleMin: 720 },
@@ -140,6 +141,7 @@ const SEED_META = {
   groceryBasket:       { key: 'seed-meta:economic:grocery-basket',            maxStaleMin: 360 },
   bigmac:              { key: 'seed-meta:economic:bigmac',                    maxStaleMin: 1440 },
   thermalEscalation:   { key: 'seed-meta:thermal:escalation',                 maxStaleMin: 240 },
+  nationalDebt:        { key: 'seed-meta:economic:national-debt',              maxStaleMin: 10080 }, // 7 days — monthly seed
   tariffTrendsUs:      { key: 'seed-meta:trade:tariffs:v1:840:all:10',        maxStaleMin: 900 },
 };
 

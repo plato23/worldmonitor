@@ -5846,6 +5846,10 @@ body.playback-mode .status-dot {
   color: var(--red);
 }
 
+.market-change--7d {
+  opacity: 0.7;
+}
+
 /* Gulf Economies */
 .gulf-section {
   margin-bottom: 8px;
@@ -20121,4 +20125,206 @@ body.has-breaking-alert .panels-grid {
   flex: 1;
   height: 1px;
   background: var(--border);
+}
+
+/* National Debt Clock Panel */
+.debt-panel-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: 100%;
+}
+
+.debt-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 8px;
+  flex-shrink: 0;
+}
+
+.debt-sort-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+
+.debt-tab {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.debt-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.debt-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.debt-search {
+  width: 110px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text);
+  outline: none;
+  flex-shrink: 0;
+}
+
+.debt-search:focus {
+  border-color: var(--accent);
+}
+
+.debt-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.debt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.debt-row:last-child {
+  border-bottom: none;
+}
+
+.debt-rank {
+  font-size: 10px;
+  color: var(--text-dim);
+  min-width: 18px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.debt-flag {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+}
+
+.debt-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.debt-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.debt-meta {
+  display: flex;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+
+.debt-growth.debt-growth-high {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.debt-growth.debt-growth-mid {
+  color: var(--yellow, #f5a623);
+}
+
+.debt-ticker {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+.debt-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.debt-source,
+.debt-updated {
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+.debt-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.debt-summary-card-world {
+  grid-column: 1 / -1;
+}
+
+.debt-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  background: var(--overlay-subtle);
+}
+
+.debt-summary-card-deficit {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.debt-summary-card-warning {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.debt-summary-card-surplus {
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.debt-summary-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.debt-summary-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }

@@ -11,6 +11,10 @@ import {
   HeatmapPanel,
   CommoditiesPanel,
   CryptoPanel,
+  CryptoHeatmapPanel,
+  DefiTokensPanel,
+  AiTokensPanel,
+  OtherTokensPanel,
   PredictionPanel,
   MonitorPanel,
   EconomicPanel,
@@ -53,9 +57,10 @@ import { escapeHtml } from '@/utils/sanitize';
 import {
   FEEDS,
   INTEL_SOURCES,
-  DEFAULT_PANELS,
   STORAGE_KEYS,
   SITE_VARIANT,
+  ALL_PANELS,
+  VARIANT_DEFAULTS,
 } from '@/config';
 import { BETA_MODE } from '@/config/beta';
 import { t } from '@/services/i18n';
@@ -480,7 +485,7 @@ export class PanelLayoutManager implements AppModule {
   }
 
   private shouldCreatePanel(key: string): boolean {
-    return Object.prototype.hasOwnProperty.call(DEFAULT_PANELS, key);
+    return Object.prototype.hasOwnProperty.call(this.ctx.panelSettings, key);
   }
 
   private createNewsPanel(key: string, labelKey: string): NewsPanel | null {
@@ -553,6 +558,10 @@ export class PanelLayoutManager implements AppModule {
     this.createNewsPanel('intel', 'panels.intel');
 
     this.createPanel('crypto', () => new CryptoPanel());
+    this.createPanel('crypto-heatmap', () => new CryptoHeatmapPanel());
+    this.createPanel('defi-tokens', () => new DefiTokensPanel());
+    this.createPanel('ai-tokens', () => new AiTokensPanel());
+    this.createPanel('other-tokens', () => new OtherTokensPanel());
     this.createNewsPanel('middleeast', 'panels.middleeast');
     this.createNewsPanel('layoffs', 'panels.layoffs');
     this.createNewsPanel('ai', 'panels.ai');
@@ -587,8 +596,8 @@ export class PanelLayoutManager implements AppModule {
       if (!Array.isArray((FEEDS as Record<string, unknown>)[key])) continue;
       const panelKey = this.ctx.panels[key] && !this.ctx.newsPanels[key] ? `${key}-news` : key;
       if (this.ctx.panels[panelKey]) continue;
-      if (!DEFAULT_PANELS[panelKey] && !DEFAULT_PANELS[key]) continue;
-      const panelConfig = DEFAULT_PANELS[panelKey] ?? DEFAULT_PANELS[key];
+      if (!this.ctx.panelSettings[panelKey] && !this.ctx.panelSettings[key]) continue;
+      const panelConfig = this.ctx.panelSettings[panelKey] ?? this.ctx.panelSettings[key] ?? ALL_PANELS[panelKey] ?? ALL_PANELS[key];
       const label = panelConfig?.name ?? key.charAt(0).toUpperCase() + key.slice(1);
       const panel = new NewsPanel(panelKey, label);
       this.attachRelatedAssetHandlers(panel);
@@ -799,6 +808,14 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
+    this.lazyPanel('national-debt', () =>
+      import('@/components/NationalDebtPanel').then(m => {
+        const p = new m.NationalDebtPanel();
+        void p.refresh();
+        return p;
+      }),
+    );
+
     this.createPanel('macro-signals', () => new MacroSignalsPanel());
     this.createPanel('etf-flows', () => new ETFFlowsPanel());
     this.createPanel('stablecoins', () => new StablecoinPanel());
@@ -905,7 +922,10 @@ export class PanelLayoutManager implements AppModule {
       }
     }
 
-    const defaultOrder = Object.keys(DEFAULT_PANELS).filter(k => k !== 'map');
+    const variantOrder = (VARIANT_DEFAULTS[SITE_VARIANT] ?? VARIANT_DEFAULTS['full'] ?? []).filter(k => k !== 'map');
+    const activePanelSet = new Set(Object.keys(this.ctx.panelSettings));
+    const crossVariantKeys = Object.keys(this.ctx.panelSettings).filter(k => !variantOrder.includes(k) && k !== 'map');
+    const defaultOrder = [...variantOrder.filter(k => activePanelSet.has(k)), ...crossVariantKeys];
     const activePanelKeys = Object.keys(this.ctx.panelSettings).filter(k => k !== 'map');
     const bottomSet = this.getSavedBottomSet();
     const savedOrder = this.getSavedPanelOrder();
@@ -1091,10 +1111,10 @@ export class PanelLayoutManager implements AppModule {
     this.applyInitialUrlState();
 
     if (import.meta.env.DEV) {
-      const configured = new Set(Object.keys(DEFAULT_PANELS).filter(k => k !== 'map'));
+      const configured = new Set(Object.keys(ALL_PANELS).filter(k => k !== 'map'));
       const created = new Set(Object.keys(this.ctx.panels));
       const extra = [...created].filter(k => !configured.has(k) && k !== 'deduction' && k !== 'runtime-config' && !k.startsWith('cw-') && !k.startsWith('mcp-'));
-      if (extra.length) console.warn('[PanelLayout] Panels created but not in DEFAULT_PANELS:', extra);
+      if (extra.length) console.warn('[PanelLayout] Panels created but not in ALL_PANELS:', extra);
     }
   }
 

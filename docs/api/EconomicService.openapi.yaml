@@ -365,6 +365,32 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /api/economic/v1/get-national-debt:
+        get:
+            tags:
+                - EconomicService
+            summary: GetNationalDebt
+            description: GetNationalDebt retrieves national debt clock data for all countries.
+            operationId: GetNationalDebt
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetNationalDebtResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
 components:
     schemas:
         Error:
@@ -1036,3 +1062,58 @@ components:
                     type: string
                 available:
                     type: boolean
+        GetNationalDebtRequest:
+            type: object
+            description: GetNationalDebtRequest requests national debt data for all countries.
+        GetNationalDebtResponse:
+            type: object
+            properties:
+                entries:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/NationalDebtEntry'
+                seededAt:
+                    type: string
+                    description: ISO 8601 timestamp when seed data was written.
+                unavailable:
+                    type: boolean
+                    description: True when upstream data is unavailable (fallback result).
+            description: GetNationalDebtResponse wraps the full list of national debt entries.
+        NationalDebtEntry:
+            type: object
+            properties:
+                iso3:
+                    type: string
+                    description: ISO3 country code (e.g. "USA").
+                debtUsd:
+                    type: number
+                    format: double
+                    description: Total debt in USD at baseline_ts.
+                gdpUsd:
+                    type: number
+                    format: double
+                    description: GDP in USD (nominal, latest year).
+                debtToGdp:
+                    type: number
+                    format: double
+                    description: Debt as % of GDP.
+                annualGrowth:
+                    type: number
+                    format: double
+                    description: Year-over-year debt growth percent (2023->2024).
+                perSecondRate:
+                    type: number
+                    format: double
+                    description: Deficit-derived accrual in USD per second.
+                perDayRate:
+                    type: number
+                    format: double
+                    description: Deficit-derived accrual in USD per day.
+                baselineTs:
+                    type: string
+                    format: int64
+                    description: UTC ms timestamp anchoring the debt_usd figure (2024-01-01T00:00:00Z).
+                source:
+                    type: string
+                    description: Human-readable source string.
+            description: NationalDebtEntry holds debt data for a single country.

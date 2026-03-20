@@ -276,6 +276,22 @@ function safeEnd(res, statusCode, headers, body) {
   }
 }
 
+const WORLD_BANK_COUNTRY_ALLOWLIST = new Set([
+  'USA','CHN','JPN','DEU','KOR','GBR','IND','ISR','SGP','TWN',
+  'FRA','CAN','SWE','NLD','CHE','FIN','IRL','AUS','BRA','IDN',
+  'ARE','SAU','QAT','BHR','EGY','TUR','MYS','THA','VNM','PHL',
+  'ESP','ITA','POL','CZE','DNK','NOR','AUT','BEL','PRT','EST',
+  'MEX','ARG','CHL','COL','ZAF','NGA','KEN',
+]);
+
+function normalizeWorldBankCountryCodes(rawValue) {
+  const parts = String(rawValue || '')
+    .split(/[;,]/g)
+    .map((part) => part.trim().toUpperCase())
+    .filter((part) => /^[A-Z]{3}$/.test(part) && WORLD_BANK_COUNTRY_ALLOWLIST.has(part));
+  return parts.length > 0 ? parts.join(';') : null;
+}
+
 function _acceptsEncoding(header, encoding) {
   if (!header) return false;
   const tokens = header.split(',');
@@ -1264,11 +1280,19 @@ const MARKET_SYMBOLS = [
   '^DJI', '^GSPC', '^IXIC',
 ];
 
-const COMMODITY_SYMBOLS = ['^VIX', 'GC=F', 'CL=F', 'NG=F', 'SI=F', 'HG=F'];
+const _commodityCfg = requireShared('commodities.json');
+const COMMODITY_SYMBOLS = _commodityCfg.commodities.map(c => c.symbol);
 
 const SECTOR_SYMBOLS = ['XLK', 'XLF', 'XLE', 'XLV', 'XLY', 'XLI', 'XLP', 'XLU', 'XLB', 'XLRE', 'XLC', 'SMH'];
 
-const YAHOO_ONLY = new Set(['^GSPC', '^DJI', '^IXIC', '^VIX', 'GC=F', 'CL=F', 'NG=F', 'SI=F', 'HG=F']);
+// Symbols that must come from Yahoo — Finnhub doesn't carry futures (=F) or major indices.
+// ^GSPC/^DJI/^IXIC live in MARKET_SYMBOLS (not COMMODITY_SYMBOLS) so they must be listed
+// explicitly; commodity ETFs (URA, LIT) also go through Yahoo since they have no Finnhub feed.
+const YAHOO_ONLY = new Set([
+  '^GSPC', '^DJI', '^IXIC',
+  ...COMMODITY_SYMBOLS.filter(s => s.endsWith('=F') || s.startsWith('^')),
+  'URA', 'LIT',
+]);
 
 function fetchYahooChartDirect(symbol) {
   return new Promise((resolve) => {
@@ -1651,6 +1675,94 @@ async function seedStablecoinMarkets() {
   return stablecoins.length;
 }
 
+// Crypto Sectors Heatmap — CoinGecko sector averages
+const _sectorsCfg = requireShared('crypto-sectors.json');
+const SECTORS_LIST = _sectorsCfg.sectors;
+const SECTORS_SEED_TTL = 3600; // 1h
+
+async function seedCryptoSectors() {
+  const allIds = [...new Set(SECTORS_LIST.flatMap((s) => s.tokens))];
+  let data;
+  try {
+    const apiKey = process.env.COINGECKO_API_KEY;
+    const base = apiKey ? 'https://pro-api.coingecko.com/api/v3' : 'https://api.coingecko.com/api/v3';
+    const headers = { Accept: 'application/json' };
+    if (apiKey) headers['x-cg-pro-api-key'] = apiKey;
+    const url = `${base}/coins/markets?vs_currency=usd&ids=${allIds.join(',')}&order=market_cap_desc&sparkline=false&price_change_percentage=24h`;
+    data = await cyberHttpGetJson(url, headers, 15000);
+    if (!Array.isArray(data) || data.length === 0) throw new Error('CoinGecko returned no data');
+  } catch (err) {
+    console.warn(`[CryptoSectors] CoinGecko failed: ${err.message} — skipping`);
+    return 0;
+  }
+  const byId = new Map(data.map((c) => [c.id, c.price_change_percentage_24h]));
+  const sectors = SECTORS_LIST.map((sector) => {
+    const changes = sector.tokens.map((id) => byId.get(id)).filter((v) => typeof v === 'number' && isFinite(v));
+    const change = changes.length > 0 ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
+    return { id: sector.id, name: sector.name, change };
+  });
+  const ok1 = await upstashSet('market:crypto-sectors:v1', { sectors }, SECTORS_SEED_TTL);
+  const ok2 = await upstashSet('seed-meta:market:crypto-sectors', { fetchedAt: Date.now(), recordCount: sectors.length }, 604800);
+  console.log(`[CryptoSectors] Seeded ${sectors.length} sectors (redis: ${ok1 && ok2 ? 'OK' : 'PARTIAL'})`);
+  return sectors.length;
+}
+
+// Token Panels — DeFi, AI, Other — single CoinGecko call writing 3 Redis keys
+const _defiCfg = requireShared('defi-tokens.json');
+const _aiCfg = requireShared('ai-tokens.json');
+const _otherCfg = requireShared('other-tokens.json');
+const TOKEN_PANELS_SEED_TTL = 3600; // 1h
+
+function _mapTokens(ids, meta, byId) {
+  const tokens = [];
+  for (const id of ids) {
+    const coin = byId.get(id);
+    if (!coin) continue;
+    const m = meta[id];
+    tokens.push({
+      name: m?.name || coin.name || id,
+      symbol: m?.symbol || (coin.symbol || id).toUpperCase(),
+      price: coin.current_price ?? 0,
+      change24h: coin.price_change_percentage_24h ?? 0,
+      change7d: coin.price_change_percentage_7d_in_currency ?? 0,
+    });
+  }
+  return tokens;
+}
+
+async function seedTokenPanels() {
+  const allIds = [...new Set([..._defiCfg.ids, ..._aiCfg.ids, ..._otherCfg.ids])];
+  let data;
+  try {
+    const apiKey = process.env.COINGECKO_API_KEY;
+    const base = apiKey ? 'https://pro-api.coingecko.com/api/v3' : 'https://api.coingecko.com/api/v3';
+    const headers = { Accept: 'application/json' };
+    if (apiKey) headers['x-cg-pro-api-key'] = apiKey;
+    const url = `${base}/coins/markets?vs_currency=usd&ids=${allIds.join(',')}&order=market_cap_desc&sparkline=false&price_change_percentage=24h,7d`;
+    data = await cyberHttpGetJson(url, headers, 15000);
+    if (!Array.isArray(data) || data.length === 0) throw new Error('CoinGecko returned no data');
+  } catch (err) {
+    console.warn(`[TokenPanels] CoinGecko failed: ${err.message} — skipping`);
+    return 0;
+  }
+  const byId = new Map(data.map((c) => [c.id, c]));
+  const defi = { tokens: _mapTokens(_defiCfg.ids, _defiCfg.meta, byId) };
+  const ai = { tokens: _mapTokens(_aiCfg.ids, _aiCfg.meta, byId) };
+  const other = { tokens: _mapTokens(_otherCfg.ids, _otherCfg.meta, byId) };
+  if (defi.tokens.length === 0 && ai.tokens.length === 0 && other.tokens.length === 0) {
+    console.warn('[TokenPanels] All panels empty after mapping — skipping Redis write to preserve cached data');
+    return 0;
+  }
+  const ok1 = await upstashSet('market:defi-tokens:v1', defi, TOKEN_PANELS_SEED_TTL);
+  const ok2 = await upstashSet('market:ai-tokens:v1', ai, TOKEN_PANELS_SEED_TTL);
+  const ok3 = await upstashSet('market:other-tokens:v1', other, TOKEN_PANELS_SEED_TTL);
+  await upstashSet('seed-meta:market:token-panels', { fetchedAt: Date.now(), recordCount: defi.tokens.length + ai.tokens.length + other.tokens.length }, 604800);
+  const total = defi.tokens.length + ai.tokens.length + other.tokens.length;
+  const allOk = ok1 && ok2 && ok3;
+  console.log(`[TokenPanels] Seeded ${defi.tokens.length} DeFi, ${ai.tokens.length} AI, ${other.tokens.length} Other (${total} total, redis: ${allOk ? 'OK' : 'PARTIAL'})`);
+  return total;
+}
+
 async function seedAllMarketData() {
   const t0 = Date.now();
   const q = await seedMarketQuotes();
@@ -1660,7 +1772,9 @@ async function seedAllMarketData() {
   const e = await seedEtfFlows();
   const cr = await seedCryptoQuotes();
   const sc = await seedStablecoinMarkets();
-  console.log(`[Market] Seed complete: ${q} quotes, ${c} commodities, ${s} sectors, ${g} gulf, ${e} etf, ${cr} crypto, ${sc} stablecoins (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+  const cs = await seedCryptoSectors();
+  const tp = await seedTokenPanels();
+  console.log(`[Market] Seed complete: ${q} quotes, ${c} commodities, ${s} sectors, ${g} gulf, ${e} etf, ${cr} crypto, ${sc} stablecoins, ${cs} crypto-sectors, ${tp} token-panels (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 }
 
 async function startMarketDataSeedLoop() {
@@ -4381,25 +4495,23 @@ async function seedUsniFleet() {
   console.log('[USNI] Fetching fleet tracker...');
   const t0 = Date.now();
   try {
-    const proxyAuth = process.env.RESIDENTIAL_PROXY_AUTH || OREF_PROXY_AUTH;
-    if (!proxyAuth) { console.warn('[USNI] No proxy auth configured, skipping'); return; }
-
-    let raw;
-    try {
-      raw = orefCurlFetch(proxyAuth, USNI_URL);
-    } catch (e) {
-      console.warn(`[USNI] curl+proxy failed: ${e.message}, trying direct...`);
-      try {
-        const { execFileSync } = require('child_process');
-        raw = execFileSync('curl', ['-sS', '--compressed', '--max-time', '15',
-          '-H', 'Accept: application/json', '-H', `User-Agent: ${CHROME_UA}`, USNI_URL],
-          { encoding: 'utf8', timeout: 20000, stdio: ['pipe', 'pipe', 'pipe'] });
-      } catch (e2) {
-        throw new Error(`All curl attempts failed: ${e2.message}`);
-      }
+    // USNI (WordPress) returns 403 from Railway datacenter IPs via Cloudflare.
+    // Route through the residential proxy when available; fall back to direct for dev.
+    const proxyAuth = process.env.OREF_PROXY_AUTH || OREF_PROXY_AUTH;
+    let wpData;
+    if (proxyAuth) {
+      const proxy = parseProxyUrl(`http://${proxyAuth}`);
+      const result = proxy ? await ytFetchViaProxy(USNI_URL, proxy) : null;
+      if (!result || !result.ok) throw new Error(`proxy HTTP ${result?.status ?? 'unavailable'}`);
+      wpData = JSON.parse(result.body);
+    } else {
+      const res = await fetch(USNI_URL, {
+        headers: { 'User-Agent': CHROME_UA, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      wpData = await res.json();
     }
-
-    const wpData = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!Array.isArray(wpData) || !wpData.length) throw new Error('No fleet tracker articles');
 
     const post = wpData[0];
@@ -6211,25 +6323,11 @@ function handleWorldBankRequest(req, res) {
     }, body);
   }
 
-  const indicator = wbParams.get('indicator');
-  if (!indicator) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Missing indicator parameter' }));
-  }
-
   const country = wbParams.get('country');
   const countries = wbParams.get('countries');
   const years = parseInt(wbParams.get('years') || '5', 10);
-  const countryList = country || (countries ? countries.split(',').join(';') : [
-    'USA','CHN','JPN','DEU','KOR','GBR','IND','ISR','SGP','TWN',
-    'FRA','CAN','SWE','NLD','CHE','FIN','IRL','AUS','BRA','IDN',
-    'ARE','SAU','QAT','BHR','EGY','TUR','MYS','THA','VNM','PHL',
-    'ESP','ITA','POL','CZE','DNK','NOR','AUT','BEL','PRT','EST',
-    'MEX','ARG','CHL','COL','ZAF','NGA','KEN',
-  ].join(';'));
 
   const currentYear = new Date().getFullYear();
-  const startYear = currentYear - years;
   const TECH_INDICATORS = {
     'IT.NET.USER.ZS': 'Internet Users (% of population)',
     'IT.CEL.SETS.P2': 'Mobile Subscriptions (per 100 people)',
@@ -6248,6 +6346,21 @@ function handleWorldBankRequest(req, res) {
     'NY.GDP.PCAP.CD': 'GDP per Capita (current US$)',
     'NE.EXP.GNFS.ZS': 'Exports of Goods & Services (% of GDP)',
   };
+
+  const indicator = wbParams.get('indicator');
+  // Validate World Bank indicator code format (e.g. IT.NET.USER.ZS, NY.GDP.MKTP.CD).
+  // Accept any code with 2-6 dot-separated alphanumeric segments; this allows callers
+  // to request indicators beyond the TECH_INDICATORS display-name map.
+  if (!indicator || !/^[A-Z0-9]{2,10}(\.[A-Z0-9]{2,10}){1,5}$/.test(indicator)) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Invalid indicator parameter' }));
+  }
+
+  const countryList = normalizeWorldBankCountryCodes(country)
+    || normalizeWorldBankCountryCodes(countries)
+    || [...WORLD_BANK_COUNTRY_ALLOWLIST].join(';');
+
+  const startYear = currentYear - Math.min(Math.max(1, years), 30);
 
   const wbUrl = `https://api.worldbank.org/v2/country/${countryList}/indicator/${encodeURIComponent(indicator)}?format=json&date=${startYear}:${currentYear}&per_page=1000`;
 

@@ -419,6 +419,110 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /api/market/v1/list-crypto-sectors:
+        get:
+            tags:
+                - MarketService
+            summary: ListCryptoSectors
+            description: ListCryptoSectors retrieves crypto sector performance averages.
+            operationId: ListCryptoSectors
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListCryptoSectorsResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/market/v1/list-defi-tokens:
+        get:
+            tags:
+                - MarketService
+            summary: ListDefiTokens
+            description: ListDefiTokens retrieves DeFi token prices and changes.
+            operationId: ListDefiTokens
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListDefiTokensResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/market/v1/list-ai-tokens:
+        get:
+            tags:
+                - MarketService
+            summary: ListAiTokens
+            description: ListAiTokens retrieves AI-focused crypto token prices and changes.
+            operationId: ListAiTokens
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListAiTokensResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/market/v1/list-other-tokens:
+        get:
+            tags:
+                - MarketService
+            summary: ListOtherTokens
+            description: ListOtherTokens retrieves other/trending crypto token prices and changes.
+            operationId: ListOtherTokens
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListOtherTokensResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
 components:
     schemas:
         Error:
@@ -549,6 +653,10 @@ components:
                         type: number
                         format: double
                         description: Sparkline data points (recent price history).
+                change7d:
+                    type: number
+                    format: double
+                    description: 7-day percentage change.
             required:
                 - symbol
             description: CryptoQuote represents a cryptocurrency quote from CoinGecko.
@@ -1188,3 +1296,61 @@ components:
                     type: array
                     items:
                         $ref: '#/components/schemas/BacktestStockResponse'
+        ListCryptoSectorsRequest:
+            type: object
+            description: ListCryptoSectorsRequest retrieves crypto sector performance.
+        ListCryptoSectorsResponse:
+            type: object
+            properties:
+                sectors:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/CryptoSector'
+            description: ListCryptoSectorsResponse contains crypto sector performance data.
+        CryptoSector:
+            type: object
+            properties:
+                id:
+                    type: string
+                    description: Sector identifier.
+                name:
+                    type: string
+                    description: Sector display name.
+                change:
+                    type: number
+                    format: double
+                    description: Average 24h percentage change across sector tokens.
+            description: CryptoSector represents performance data for a crypto market sector.
+        ListDefiTokensRequest:
+            type: object
+            description: ListDefiTokensRequest retrieves DeFi token prices.
+        ListDefiTokensResponse:
+            type: object
+            properties:
+                tokens:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/CryptoQuote'
+            description: ListDefiTokensResponse contains DeFi token price data.
+        ListAiTokensRequest:
+            type: object
+            description: ListAiTokensRequest retrieves AI crypto token prices.
+        ListAiTokensResponse:
+            type: object
+            properties:
+                tokens:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/CryptoQuote'
+            description: ListAiTokensResponse contains AI token price data.
+        ListOtherTokensRequest:
+            type: object
+            description: ListOtherTokensRequest retrieves other/trending crypto token prices.
+        ListOtherTokensResponse:
+            type: object
+            properties:
+                tokens:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/CryptoQuote'
+            description: ListOtherTokensResponse contains other token price data.

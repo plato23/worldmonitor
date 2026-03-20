@@ -36,6 +36,7 @@ export interface CryptoQuote {
   price: number;
   change: number;
   sparkline: number[];
+  change7d: number;
 }
 
 export interface ListCommodityQuotesRequest {
@@ -291,6 +292,40 @@ export interface ListStoredStockBacktestsRequest {
 
 export interface ListStoredStockBacktestsResponse {
   items: BacktestStockResponse[];
+}
+
+export interface ListCryptoSectorsRequest {
+}
+
+export interface ListCryptoSectorsResponse {
+  sectors: CryptoSector[];
+}
+
+export interface CryptoSector {
+  id: string;
+  name: string;
+  change: number;
+}
+
+export interface ListDefiTokensRequest {
+}
+
+export interface ListDefiTokensResponse {
+  tokens: CryptoQuote[];
+}
+
+export interface ListAiTokensRequest {
+}
+
+export interface ListAiTokensResponse {
+  tokens: CryptoQuote[];
+}
+
+export interface ListOtherTokensRequest {
+}
+
+export interface ListOtherTokensResponse {
+  tokens: CryptoQuote[];
 }
 
 export interface FieldViolation {
@@ -642,6 +677,98 @@ export class MarketServiceClient {
     }
 
     return await resp.json() as ListStoredStockBacktestsResponse;
+  }
+
+  async listCryptoSectors(req: ListCryptoSectorsRequest, options?: MarketServiceCallOptions): Promise<ListCryptoSectorsResponse> {
+    let path = "/api/market/v1/list-crypto-sectors";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListCryptoSectorsResponse;
+  }
+
+  async listDefiTokens(req: ListDefiTokensRequest, options?: MarketServiceCallOptions): Promise<ListDefiTokensResponse> {
+    let path = "/api/market/v1/list-defi-tokens";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListDefiTokensResponse;
+  }
+
+  async listAiTokens(req: ListAiTokensRequest, options?: MarketServiceCallOptions): Promise<ListAiTokensResponse> {
+    let path = "/api/market/v1/list-ai-tokens";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListAiTokensResponse;
+  }
+
+  async listOtherTokens(req: ListOtherTokensRequest, options?: MarketServiceCallOptions): Promise<ListOtherTokensResponse> {
+    let path = "/api/market/v1/list-other-tokens";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListOtherTokensResponse;
   }
 
   private async handleError(resp: Response): Promise<never> {

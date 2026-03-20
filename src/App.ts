@@ -7,6 +7,9 @@ import {
   MOBILE_DEFAULT_MAP_LAYERS,
   STORAGE_KEYS,
   SITE_VARIANT,
+  ALL_PANELS,
+  VARIANT_DEFAULTS,
+  getEffectivePanelConfig,
 } from '@/config';
 import { sanitizeLayersForVariant } from '@/config/map-layer-definitions';
 import type { MapVariant } from '@/config/map-layer-definitions';
@@ -176,7 +179,7 @@ export class App {
     if (shouldPrime('supply-chain')) {
       primeTask('supplyChain', () => this.dataLoader.loadSupplyChain());
     }
-    if (SITE_VARIANT === 'finance' && getSecretState('WORLDMONITOR_API_KEY').present) {
+    if (getSecretState('WORLDMONITOR_API_KEY').present) {
       if (shouldPrime('stock-analysis')) {
         primeTask('stockAnalysis', () => this.dataLoader.loadStockAnalysis());
       }
@@ -215,17 +218,19 @@ export class App {
     const currentVariant = SITE_VARIANT;
     console.log(`[App] Variant check: stored="${storedVariant}", current="${currentVariant}"`);
     if (storedVariant !== currentVariant) {
-      // Variant changed - use defaults for new variant, clear old settings
-      console.log('[App] Variant changed - resetting to defaults');
+      // Variant changed — seed new variant's panels but preserve existing user choices
+      console.log('[App] Variant changed - seeding new defaults, preserving user choices');
       localStorage.setItem('worldmonitor-variant', currentVariant);
+      // Reset map layers for the new variant (map layers are not user-personalized the same way)
       localStorage.removeItem(STORAGE_KEYS.mapLayers);
-      localStorage.removeItem(STORAGE_KEYS.panels);
-      localStorage.removeItem(PANEL_ORDER_KEY);
-      localStorage.removeItem(PANEL_ORDER_KEY + '-bottom');
-      localStorage.removeItem(PANEL_ORDER_KEY + '-bottom-set');
-      localStorage.removeItem(PANEL_SPANS_KEY);
       mapLayers = sanitizeLayersForVariant({ ...defaultLayers }, currentVariant as MapVariant);
-      panelSettings = { ...DEFAULT_PANELS };
+      // Load existing panel prefs (if any) and seed new variant's panels
+      panelSettings = loadFromStorage<Record<string, PanelConfig>>(STORAGE_KEYS.panels, {});
+      for (const key of (VARIANT_DEFAULTS[currentVariant] ?? [])) {
+        if (!(key in panelSettings)) {
+          panelSettings[key] = { ...getEffectivePanelConfig(key, currentVariant), enabled: true };
+        }
+      }
     } else {
       mapLayers = sanitizeLayersForVariant(
         loadFromStorage<MapLayers>(STORAGE_KEYS.mapLayers, defaultLayers),
@@ -258,11 +263,25 @@ export class App {
         localStorage.setItem(PANEL_KEY_RENAMES_MIGRATION_KEY, 'done');
       }
 
-      // Merge in any new panels that didn't exist when settings were saved
-      for (const [key, config] of Object.entries(DEFAULT_PANELS)) {
+      // Merge in any panels from ALL_PANELS that didn't exist when settings were saved
+      for (const key of Object.keys(ALL_PANELS)) {
         if (!(key in panelSettings)) {
-          panelSettings[key] = { ...config };
+          const isDefault = (VARIANT_DEFAULTS[SITE_VARIANT] ?? []).includes(key);
+          panelSettings[key] = { ...getEffectivePanelConfig(key, SITE_VARIANT), enabled: isDefault };
         }
+      }
+
+      // One-time migration: expose all panels to existing users (previously variant-gated)
+      const UNIFIED_MIGRATION_KEY = 'worldmonitor-unified-panels-v1';
+      if (!localStorage.getItem(UNIFIED_MIGRATION_KEY)) {
+        const variantDefaults = new Set(VARIANT_DEFAULTS[SITE_VARIANT] ?? []);
+        for (const key of Object.keys(ALL_PANELS)) {
+          if (!(key in panelSettings)) {
+            panelSettings[key] = { ...getEffectivePanelConfig(key, SITE_VARIANT), enabled: variantDefaults.has(key) };
+          }
+        }
+        saveToStorage(STORAGE_KEYS.panels, panelSettings);
+        localStorage.setItem(UNIFIED_MIGRATION_KEY, 'done');
       }
       console.log('[App] Loaded panel settings from storage:', Object.entries(panelSettings).filter(([_, v]) => !v.enabled).map(([k]) => k));
 
@@ -315,7 +334,7 @@ export class App {
     // One-time migration: prune removed panel keys from stored settings and order
     const PANEL_PRUNE_KEY = 'worldmonitor-panel-prune-v1';
     if (!localStorage.getItem(PANEL_PRUNE_KEY)) {
-      const validKeys = new Set(Object.keys(DEFAULT_PANELS));
+      const validKeys = new Set(Object.keys(ALL_PANELS));
       let pruned = false;
       for (const key of Object.keys(panelSettings)) {
         if (!validKeys.has(key) && key !== 'runtime-config') {
@@ -773,7 +792,7 @@ export class App {
           name: 'markets',
           fn: () => this.dataLoader.loadMarkets(),
           intervalMs: REFRESH_INTERVALS.markets,
-          condition: () => this.isAnyPanelNearViewport(['markets', 'heatmap', 'commodities', 'crypto']),
+          condition: () => this.isAnyPanelNearViewport(['markets', 'heatmap', 'commodities', 'crypto', 'crypto-heatmap', 'defi-tokens', 'ai-tokens', 'other-tokens']),
         },
         {
           name: 'predictions',

@@ -8,9 +8,14 @@ import {
   buildForecastTraceArtifacts,
   buildForecastRunWorldState,
   buildCrossSituationEffects,
+  buildReportableInteractionLedger,
+  buildInteractionWatchlist,
+  isCrossTheaterPair,
+  getMacroRegion,
   attachSituationContext,
   projectSituationClusters,
   refreshPublishedNarratives,
+  selectPublishedForecastPool,
 } from '../scripts/seed-forecasts.mjs';
 
 import {
@@ -1532,6 +1537,344 @@ describe('forecast run world state', () => {
     )));
   });
 
+  it('dedupes the interaction watchlist by source target and channel before report surfacing', () => {
+    const watchlist = buildInteractionWatchlist([
+      {
+        sourceSituationId: 'sit-a',
+        targetSituationId: 'sit-b',
+        sourceLabel: 'Brazil cyber situation',
+        targetLabel: 'United States cyber and political situation',
+        strongestChannel: 'cyber_disruption',
+        interactionType: 'spillover',
+        stage: 'round_1',
+        score: 4.2,
+        confidence: 0.71,
+        sourceActorName: 'Cyber unit',
+        targetActorName: 'Agency',
+      },
+      {
+        sourceSituationId: 'sit-a',
+        targetSituationId: 'sit-b',
+        sourceLabel: 'Brazil cyber situation',
+        targetLabel: 'United States cyber and political situation',
+        strongestChannel: 'cyber_disruption',
+        interactionType: 'spillover',
+        stage: 'round_2',
+        score: 4.4,
+        confidence: 0.74,
+        sourceActorName: 'Cyber unit',
+        targetActorName: 'Agency',
+      },
+    ]);
+
+    assert.equal(watchlist.length, 1);
+    assert.equal(watchlist[0].label, 'Brazil cyber situation -> United States cyber and political situation');
+    assert.ok(watchlist[0].summary.includes('2 round(s)'));
+  });
+
+  it('blocks weak cross-theater political effects without strong actor continuity', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-politics-eu',
+          label: 'Germany political situation',
+          dominantDomain: 'political',
+          familyId: 'fam-politics',
+          familyLabel: 'Cross-regional political instability family',
+          regions: ['Germany'],
+          actorIds: ['actor-germany'],
+          effectChannels: [{ type: 'political_pressure', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.54,
+          totalPressure: 0.62,
+          totalStabilization: 0.39,
+        },
+        {
+          situationId: 'sit-conflict-me',
+          label: 'Israel conflict and political situation',
+          dominantDomain: 'conflict',
+          familyId: 'fam-conflict',
+          familyLabel: 'Cross-regional war theater family',
+          regions: ['Israel'],
+          actorIds: ['actor-israel'],
+          effectChannels: [],
+          posture: 'escalatory',
+          postureScore: 0.91,
+          totalPressure: 0.95,
+          totalStabilization: 0.18,
+        },
+      ],
+      reportableInteractionLedger: [
+        {
+          sourceSituationId: 'sit-politics-eu',
+          targetSituationId: 'sit-conflict-me',
+          sourceLabel: 'Germany political situation',
+          targetLabel: 'Israel conflict and political situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'spillover',
+          stage: 'round_1',
+          score: 4.9,
+          confidence: 0.73,
+          actorSpecificity: 0.78,
+          directLinkCount: 1,
+          sharedActor: true,
+          regionLink: false,
+          sourceActorName: 'Coalition bloc',
+          targetActorName: 'Cabinet office',
+        },
+      ],
+    });
+
+    assert.equal(effects.length, 0);
+  });
+
+  it('keeps structural situation-level actor overlap in political reportable filtering', () => {
+    const source = {
+      situationId: 'sit-politics-a',
+      label: 'Germany political situation',
+      dominantDomain: 'political',
+      regions: ['Germany'],
+      actorIds: ['shared-actor', 'actor-germany'],
+    };
+    const target = {
+      situationId: 'sit-politics-b',
+      label: 'Israel political situation',
+      dominantDomain: 'political',
+      regions: ['Israel'],
+      actorIds: ['shared-actor', 'actor-israel'],
+    };
+
+    const reportable = buildReportableInteractionLedger([
+      {
+        sourceSituationId: source.situationId,
+        targetSituationId: target.situationId,
+        sourceLabel: source.label,
+        targetLabel: target.label,
+        strongestChannel: 'political_pressure',
+        interactionType: 'spillover',
+        score: 5.5,
+        confidence: 0.72,
+        actorSpecificity: 0.84,
+        sharedActor: false,
+        regionLink: false,
+      },
+    ], [source, target]);
+
+    assert.equal(reportable.length, 1);
+  });
+
+  it('blocks cross-theater political effects even with shared-actor when actorSpec below 0.90', () => {
+    // US (AMERICAS) → Japan (EAST_ASIA) via political_pressure with actorSpec 0.87 is cross-theater.
+    // The gate requires actorSpec >= 0.90 for non-exempt channels across theater boundaries.
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-cyber',
+          label: 'United States cyber and political situation',
+          dominantDomain: 'cyber',
+          familyId: 'fam-cyber',
+          familyLabel: 'United States cyber pressure family',
+          regions: ['United States'],
+          actorIds: ['shared-actor', 'actor-us'],
+          effectChannels: [{ type: 'political_pressure', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.58,
+          totalPressure: 0.67,
+          totalStabilization: 0.29,
+        },
+        {
+          situationId: 'sit-market',
+          label: 'Japan market situation',
+          dominantDomain: 'market',
+          familyId: 'fam-market',
+          familyLabel: 'Japan market repricing family',
+          regions: ['Japan'],
+          actorIds: ['shared-actor', 'actor-japan'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.43,
+          totalPressure: 0.48,
+          totalStabilization: 0.31,
+        },
+      ],
+      reportableInteractionLedger: [
+        {
+          sourceSituationId: 'sit-cyber',
+          targetSituationId: 'sit-market',
+          sourceLabel: 'United States cyber and political situation',
+          targetLabel: 'Japan market situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'actor_carryover',
+          stage: 'round_1',
+          score: 5.6,
+          confidence: 0.76,
+          actorSpecificity: 0.87,
+          directLinkCount: 1,
+          sharedActor: false,
+          regionLink: false,
+          sourceActorName: 'Shared policy actor',
+          targetActorName: 'Shared policy actor',
+        },
+        {
+          sourceSituationId: 'sit-cyber',
+          targetSituationId: 'sit-market',
+          sourceLabel: 'United States cyber and political situation',
+          targetLabel: 'Japan market situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'actor_carryover',
+          stage: 'round_2',
+          score: 5.5,
+          confidence: 0.75,
+          actorSpecificity: 0.87,
+          directLinkCount: 1,
+          sharedActor: false,
+          regionLink: false,
+          sourceActorName: 'Shared policy actor',
+          targetActorName: 'Shared policy actor',
+        },
+      ],
+    });
+
+    assert.equal(effects.length, 0, 'US → Japan cross-theater political_pressure at actorSpec 0.87 should be blocked');
+  });
+
+  it('allows logistics effects with strong confidence while filtering weaker political ones', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-baltic',
+          label: 'Baltic Sea supply chain situation',
+          dominantDomain: 'supply_chain',
+          familyId: 'fam-supply',
+          familyLabel: 'Baltic maritime supply pressure family',
+          regions: ['Baltic Sea', 'Black Sea'],
+          actorIds: ['actor-shipping'],
+          effectChannels: [{ type: 'logistics_disruption', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.47,
+          totalPressure: 0.58,
+          totalStabilization: 0.33,
+        },
+        {
+          situationId: 'sit-blacksea-market',
+          label: 'Black Sea market situation',
+          dominantDomain: 'market',
+          familyId: 'fam-market',
+          familyLabel: 'Black Sea market repricing family',
+          regions: ['Black Sea'],
+          actorIds: ['actor-market'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.42,
+          totalPressure: 0.45,
+          totalStabilization: 0.32,
+        },
+        {
+          situationId: 'sit-brazil-politics',
+          label: 'Brazil political situation',
+          dominantDomain: 'political',
+          familyId: 'fam-politics-a',
+          familyLabel: 'Cross-regional political instability family',
+          regions: ['Brazil'],
+          actorIds: ['actor-brazil'],
+          effectChannels: [{ type: 'political_pressure', count: 3 }],
+          posture: 'contested',
+          postureScore: 0.55,
+          totalPressure: 0.61,
+          totalStabilization: 0.35,
+        },
+        {
+          situationId: 'sit-uk-politics',
+          label: 'United Kingdom political situation',
+          dominantDomain: 'political',
+          familyId: 'fam-politics-b',
+          familyLabel: 'Cross-regional political instability family',
+          regions: ['United Kingdom'],
+          actorIds: ['actor-uk'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.48,
+          totalPressure: 0.5,
+          totalStabilization: 0.33,
+        },
+      ],
+      reportableInteractionLedger: [
+        {
+          sourceSituationId: 'sit-baltic',
+          targetSituationId: 'sit-blacksea-market',
+          sourceLabel: 'Baltic Sea supply chain situation',
+          targetLabel: 'Black Sea market situation',
+          strongestChannel: 'logistics_disruption',
+          interactionType: 'regional_spillover',
+          stage: 'round_1',
+          score: 2.5,
+          confidence: 0.76,
+          actorSpecificity: 0.84,
+          directLinkCount: 2,
+          sharedActor: false,
+          regionLink: true,
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+        },
+        {
+          sourceSituationId: 'sit-baltic',
+          targetSituationId: 'sit-blacksea-market',
+          sourceLabel: 'Baltic Sea supply chain situation',
+          targetLabel: 'Black Sea market situation',
+          strongestChannel: 'logistics_disruption',
+          interactionType: 'regional_spillover',
+          stage: 'round_2',
+          score: 2.4,
+          confidence: 0.78,
+          actorSpecificity: 0.84,
+          directLinkCount: 2,
+          sharedActor: false,
+          regionLink: true,
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+        },
+        {
+          sourceSituationId: 'sit-brazil-politics',
+          targetSituationId: 'sit-uk-politics',
+          sourceLabel: 'Brazil political situation',
+          targetLabel: 'United Kingdom political situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'spillover',
+          stage: 'round_1',
+          score: 5.2,
+          confidence: 0.75,
+          actorSpecificity: 0.79,
+          directLinkCount: 1,
+          sharedActor: true,
+          regionLink: false,
+          sourceActorName: 'Coalition bloc',
+          targetActorName: 'Policy team',
+        },
+        {
+          sourceSituationId: 'sit-brazil-politics',
+          targetSituationId: 'sit-uk-politics',
+          sourceLabel: 'Brazil political situation',
+          targetLabel: 'United Kingdom political situation',
+          strongestChannel: 'political_pressure',
+          interactionType: 'spillover',
+          stage: 'round_2',
+          score: 5.1,
+          confidence: 0.74,
+          actorSpecificity: 0.79,
+          directLinkCount: 1,
+          sharedActor: true,
+          regionLink: false,
+          sourceActorName: 'Coalition bloc',
+          targetActorName: 'Policy team',
+        },
+      ],
+    });
+
+    assert.equal(effects.length, 1);
+    assert.equal(effects[0].channel, 'logistics_disruption');
+    assert.ok(effects[0].confidence >= 0.5);
+  });
+
   it('ignores incompatible prior simulation momentum when the simulation version changes', () => {
     const conflict = makePrediction('conflict', 'Israel', 'Active armed conflict: Israel', 0.76, 0.66, '7d', [
       { type: 'ucdp', value: 'Israeli theater remains active', weight: 0.4 },
@@ -1565,5 +1908,193 @@ describe('forecast run world state', () => {
 
     assert.equal(worldState.simulationState.version, 2);
     assert.ok((worldState.simulationState.situationSimulations || []).every((item) => item.postureScore < 0.99));
+  });
+});
+
+describe('cross-theater gate', () => {
+  it('identifies cross-theater pairs correctly', () => {
+    assert.equal(isCrossTheaterPair(['Israel'], ['Taiwan']), true);
+    assert.equal(isCrossTheaterPair(['Israel'], ['Iran']), false);
+    assert.equal(isCrossTheaterPair(['Brazil'], ['Mexico']), false);
+    assert.equal(isCrossTheaterPair(['Cuba'], ['Iran']), true);
+    assert.equal(isCrossTheaterPair(['China'], ['United States']), true);
+    assert.equal(isCrossTheaterPair(['Baltic Sea'], ['Black Sea']), false);
+    assert.equal(isCrossTheaterPair(['Israel'], ['unknown-region']), false);
+    assert.equal(isCrossTheaterPair(['unknown-a'], ['unknown-b']), false);
+  });
+
+  it('maps regions to macro-regions', () => {
+    assert.equal(getMacroRegion(['Israel', 'Gaza']), 'MENA');
+    assert.equal(getMacroRegion(['Taiwan', 'Western Pacific']), 'EAST_ASIA');
+    assert.equal(getMacroRegion(['Brazil']), 'AMERICAS');
+    assert.equal(getMacroRegion(['Baltic Sea', 'Black Sea']), 'EUROPE');
+    assert.equal(getMacroRegion(['unknown-region']), null);
+    assert.equal(getMacroRegion([]), null);
+  });
+
+  function makeSimulation(situationId, label, domain, regions, posture, postureScore, effectChannels = []) {
+    return {
+      situationId,
+      label,
+      dominantDomain: domain,
+      familyId: `fam-${situationId}`,
+      familyLabel: `${label} family`,
+      regions,
+      actorIds: [`actor-${situationId}`],
+      effectChannels,
+      posture,
+      postureScore,
+      totalPressure: posture === 'escalatory' ? 0.88 : 0.55,
+      totalStabilization: posture === 'escalatory' ? 0.22 : 0.38,
+    };
+  }
+
+  function makeInteraction(srcId, srcLabel, tgtId, tgtLabel, channel, stage, score, conf, spec, sharedActor, regionLink) {
+    return {
+      sourceSituationId: srcId,
+      targetSituationId: tgtId,
+      sourceLabel: srcLabel,
+      targetLabel: tgtLabel,
+      strongestChannel: channel,
+      interactionType: sharedActor ? 'actor_carryover' : 'spillover',
+      stage,
+      score,
+      confidence: conf,
+      actorSpecificity: spec,
+      directLinkCount: (sharedActor ? 1 : 0) + (regionLink ? 1 : 0) + 1,
+      sharedActor,
+      regionLink,
+      sourceActorName: 'Test actor',
+      targetActorName: 'Test actor',
+    };
+  }
+
+  it('blocks Israel → Taiwan via generic Incumbent Leadership (regional_spillover, spec 0.68)', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        makeSimulation('sit-israel', 'Israel conflict situation', 'conflict', ['Israel'], 'escalatory', 0.88,
+          [{ type: 'regional_spillover', count: 3 }]),
+        makeSimulation('sit-taiwan', 'Taiwan political situation', 'political', ['Taiwan'], 'contested', 0.54),
+      ],
+      reportableInteractionLedger: [
+        makeInteraction('sit-israel', 'Israel conflict situation', 'sit-taiwan', 'Taiwan political situation',
+          'regional_spillover', 'round_1', 5.2, 0.77, 0.68, true, false),
+        makeInteraction('sit-israel', 'Israel conflict situation', 'sit-taiwan', 'Taiwan political situation',
+          'regional_spillover', 'round_2', 5.1, 0.77, 0.68, true, false),
+      ],
+    });
+    assert.equal(effects.length, 0, 'Israel → Taiwan via generic actor should be blocked by cross-theater gate');
+  });
+
+  it('allows China → US via Threat Actors (cyber_disruption, exempt channel)', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        makeSimulation('sit-china', 'China cyber situation', 'cyber', ['China'], 'escalatory', 0.88,
+          [{ type: 'cyber_disruption', count: 3 }]),
+        // target must be infrastructure for cyber_disruption:infrastructure relation to exist
+        makeSimulation('sit-us', 'United States infrastructure situation', 'infrastructure', ['United States'], 'contested', 0.62),
+      ],
+      reportableInteractionLedger: [
+        makeInteraction('sit-china', 'China cyber situation', 'sit-us', 'United States infrastructure situation',
+          'cyber_disruption', 'round_1', 6.5, 0.91, 0.95, true, false),
+        makeInteraction('sit-china', 'China cyber situation', 'sit-us', 'United States infrastructure situation',
+          'cyber_disruption', 'round_2', 6.3, 0.90, 0.95, true, false),
+      ],
+    });
+    assert.equal(effects.length, 1, 'China (EAST_ASIA) → US (AMERICAS) via cyber_disruption should pass (exempt channel)');
+    assert.equal(effects[0].channel, 'cyber_disruption');
+  });
+
+  it('blocks Brazil → Israel conflict via External Power Broker (security_escalation, spec 0.85 < 0.90)', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        makeSimulation('sit-brazil', 'Brazil conflict situation', 'conflict', ['Brazil'], 'escalatory', 0.84,
+          [{ type: 'security_escalation', count: 3 }]),
+        makeSimulation('sit-israel', 'Israel conflict situation', 'conflict', ['Israel'], 'escalatory', 0.88),
+      ],
+      reportableInteractionLedger: [
+        makeInteraction('sit-brazil', 'Brazil conflict situation', 'sit-israel', 'Israel conflict situation',
+          'security_escalation', 'round_1', 5.8, 0.87, 0.85, true, false),
+        makeInteraction('sit-brazil', 'Brazil conflict situation', 'sit-israel', 'Israel conflict situation',
+          'security_escalation', 'round_2', 5.7, 0.86, 0.85, true, false),
+      ],
+    });
+    assert.equal(effects.length, 0, 'Brazil → Israel via generic external actor should be blocked (actorSpec 0.85 < 0.90)');
+  });
+
+  it('allows Brazil → Mexico (same macro-region, security_escalation → infrastructure)', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        makeSimulation('sit-brazil', 'Brazil conflict situation', 'conflict', ['Brazil'], 'escalatory', 0.84,
+          [{ type: 'security_escalation', count: 3 }]),
+        // target must be infrastructure for security_escalation:infrastructure relation to exist
+        makeSimulation('sit-mexico', 'Mexico infrastructure situation', 'infrastructure', ['Mexico'], 'escalatory', 0.72),
+      ],
+      reportableInteractionLedger: [
+        makeInteraction('sit-brazil', 'Brazil conflict situation', 'sit-mexico', 'Mexico infrastructure situation',
+          'security_escalation', 'round_1', 5.8, 0.87, 0.85, true, false),
+        makeInteraction('sit-brazil', 'Brazil conflict situation', 'sit-mexico', 'Mexico infrastructure situation',
+          'security_escalation', 'round_2', 5.7, 0.86, 0.85, true, false),
+      ],
+    });
+    assert.equal(effects.length, 1, 'Brazil → Mexico should pass (both AMERICAS, cross-theater gate does not apply)');
+    assert.equal(effects[0].channel, 'security_escalation');
+  });
+
+  it('blocks Cuba → Iran infrastructure (cross-theater, service_disruption, spec 0.73 < 0.90)', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        makeSimulation('sit-cuba', 'Cuba infrastructure situation', 'infrastructure', ['Cuba'], 'contested', 0.62,
+          [{ type: 'service_disruption', count: 3 }]),
+        makeSimulation('sit-iran', 'Iran infrastructure situation', 'infrastructure', ['Iran'], 'contested', 0.58),
+      ],
+      reportableInteractionLedger: [
+        makeInteraction('sit-cuba', 'Cuba infrastructure situation', 'sit-iran', 'Iran infrastructure situation',
+          'service_disruption', 'round_1', 5.5, 0.84, 0.73, true, false),
+        makeInteraction('sit-cuba', 'Cuba infrastructure situation', 'sit-iran', 'Iran infrastructure situation',
+          'service_disruption', 'round_2', 5.4, 0.83, 0.73, true, false),
+      ],
+    });
+    assert.equal(effects.length, 0, 'Cuba → Iran via generic civil-protection actor should be blocked');
+  });
+});
+
+describe('military domain guarantee in publish selection', () => {
+  function makeMinimalPred(id, domain, prob, confidence = 0.5) {
+    const pred = makePrediction(domain, 'Test Region', `Test ${domain} forecast ${id}`, prob, confidence, '30d', []);
+    pred.id = id;
+    return pred;
+  }
+
+  it('injects military forecast when buried below high-scoring non-military forecasts', () => {
+    // 14 well-scored conflict forecasts would fill the pool, leaving military out
+    const nonMilitary = Array.from({ length: 14 }, (_, i) =>
+      makeMinimalPred(`conflict-${i}`, 'conflict', 0.7 + (i * 0.001), 0.75),
+    );
+    const military = makeMinimalPred('mil-baltic', 'military', 0.41, 0.30);
+    const pool = selectPublishedForecastPool([...nonMilitary, military]);
+    const hasMilitary = pool.some((p) => p.domain === 'military');
+    assert.equal(hasMilitary, true, 'military forecast should be included via domain guarantee');
+  });
+
+  it('does not inject military when none are eligible (prob = 0)', () => {
+    const nonMilitary = Array.from({ length: 5 }, (_, i) =>
+      makeMinimalPred(`conflict-${i}`, 'conflict', 0.6, 0.6),
+    );
+    const pool = selectPublishedForecastPool(nonMilitary);
+    const hasMilitary = pool.some((p) => p.domain === 'military');
+    assert.equal(hasMilitary, false, 'no military forecast should appear when none were input');
+  });
+
+  it('does not double-inject military when it already ranks into selection naturally', () => {
+    const forecasts = [
+      makeMinimalPred('mil-1', 'military', 0.80, 0.75),
+      makeMinimalPred('conflict-1', 'conflict', 0.60, 0.60),
+      makeMinimalPred('conflict-2', 'conflict', 0.55, 0.55),
+    ];
+    const pool = selectPublishedForecastPool(forecasts);
+    const militaryCount = pool.filter((p) => p.domain === 'military').length;
+    assert.equal(militaryCount, 1, 'only one military forecast should appear, no duplication');
+
   });
 });

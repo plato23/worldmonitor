@@ -24,6 +24,8 @@ import {
   type BisPolicyRate,
   type BisExchangeRate,
   type BisCreditToGdp,
+  type GetNationalDebtResponse,
+  type NationalDebtEntry,
 } from '@/generated/client/worldmonitor/economic/v1/service_client';
 import { createCircuitBreaker } from '@/utils';
 import { getCSSColor } from '@/utils';
@@ -581,6 +583,37 @@ export async function getCountryComparison(
 // ========================================================================
 
 export type { BisPolicyRate, BisExchangeRate, BisCreditToGdp };
+export type { NationalDebtEntry };
+
+// ========================================================================
+// National Debt Clock
+// ========================================================================
+
+const nationalDebtBreaker = createCircuitBreaker<GetNationalDebtResponse>({ name: 'National Debt', cacheTtlMs: 6 * 60 * 60 * 1000, persistCache: true });
+const emptyNationalDebtFallback: GetNationalDebtResponse = { entries: [], seededAt: '', unavailable: true };
+
+export async function getNationalDebtData(): Promise<GetNationalDebtResponse> {
+  const hydrated = getHydratedData('nationalDebt') as GetNationalDebtResponse | undefined;
+  if (hydrated?.entries?.length) return hydrated;
+
+  try {
+    const resp = await fetch(toApiUrl('/api/bootstrap?keys=nationalDebt'), {
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (resp.ok) {
+      const { data } = (await resp.json()) as { data: { nationalDebt?: GetNationalDebtResponse } };
+      if (data.nationalDebt?.entries?.length) return data.nationalDebt;
+    }
+  } catch { /* fall through to RPC */ }
+
+  try {
+    return await nationalDebtBreaker.execute(async () => {
+      return client.getNationalDebt({}, { signal: AbortSignal.timeout(15_000) });
+    }, emptyNationalDebtFallback);
+  } catch {
+    return emptyNationalDebtFallback;
+  }
+}
 
 export interface BisData {
   policyRates: BisPolicyRate[];

@@ -33,7 +33,6 @@ import {
   LAYER_TO_SOURCE,
   FEEDS,
   INTEL_SOURCES,
-  DEFAULT_PANELS,
 } from '@/config';
 import { VARIANT_META } from '@/config/variant-meta';
 import { isDesktopRuntime } from '@/services/runtime';
@@ -43,6 +42,7 @@ import {
   disconnectAisStream,
 } from '@/services';
 import {
+  track,
   trackPanelView,
   trackVariantSwitch,
   trackThemeChanged,
@@ -168,7 +168,7 @@ export class EventHandlerManager implements AppModule {
   }
 
   private toggleTvMode(): void {
-    const panelKeys = Object.keys(DEFAULT_PANELS).filter(
+    const panelKeys = Object.keys(this.ctx.panelSettings).filter(
       key => this.ctx.panelSettings[key]?.enabled !== false
     );
     if (!this.ctx.tvMode) {
@@ -290,9 +290,18 @@ export class EventHandlerManager implements AppModule {
       this.callbacks.updateSearchIndex();
       this.ctx.searchModal?.open();
     };
-    document.getElementById('searchBtn')?.addEventListener('click', openSearch);
-    document.getElementById('mobileSearchBtn')?.addEventListener('click', openSearch);
-    document.getElementById('searchMobileFab')?.addEventListener('click', openSearch);
+    document.getElementById('searchBtn')?.addEventListener('click', () => {
+      track('search-open', { source: 'desktop' });
+      openSearch();
+    });
+    document.getElementById('mobileSearchBtn')?.addEventListener('click', () => {
+      track('search-open', { source: 'mobile' });
+      openSearch();
+    });
+    document.getElementById('searchMobileFab')?.addEventListener('click', () => {
+      track('search-open', { source: 'fab' });
+      openSearch();
+    });
 
     document.getElementById('copyLinkBtn')?.addEventListener('click', async () => {
       const shareUrl = this.getShareUrl();
@@ -832,7 +841,14 @@ export class EventHandlerManager implements AppModule {
     }
 
     const target = options.href || VARIANT_META[variant]?.url;
-    if (target) window.location.href = target;
+    if (!target) return;
+    try {
+      const parsed = new URL(target, window.location.href);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+      window.location.href = parsed.toString();
+    } catch {
+      return;
+    }
   }
 
   toggleFullscreen(): void {

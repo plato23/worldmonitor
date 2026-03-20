@@ -42,6 +42,11 @@ export {
   DEFAULT_MAP_LAYERS,
   MOBILE_DEFAULT_MAP_LAYERS,
   LAYER_TO_SOURCE,
+  ALL_PANELS,
+  VARIANT_DEFAULTS,
+  VARIANT_PANEL_OVERRIDES,
+  getEffectivePanelConfig,
+  isPanelEntitled,
 } from './panels';
 
 // ============================================

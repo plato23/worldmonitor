@@ -327,8 +327,8 @@ export class AirlineIntelPanel extends Panel {
     private renderPrices(): void {
         const provider = this.pricesProvider;
         const providerBadge = provider === 'travelpayouts_data'
-            ? `<span class="tp-badge">${t('components.airlineIntel.cachedInsight')} · Travelpayouts</span>`
-            : `<span class="demo-badge">${t('components.airlineIntel.demoMode')}</span>`;
+            ? `<span class="tp-badge">${escapeHtml(t('components.airlineIntel.cachedInsight'))} · Travelpayouts</span>`
+            : `<span class="demo-badge">${escapeHtml(t('components.airlineIntel.demoMode'))}</span>`;
 
         const searchForm = `
       <div class="price-controls" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 0;align-items:center">
