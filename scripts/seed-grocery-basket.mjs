@@ -82,34 +82,43 @@ async function searchExa(query, domains) {
   return resp.json();
 }
 
-// Only match prices that include an explicit currency code — bare numbers are too noisy
-// (EXA summaries typically say "priced at AED 3.99" or "AED3.99")
+// Match price + currency together — never discard the currency code
 const PRICE_PATTERNS = [
-  /(\d+(?:\.\d{1,3})?)\s*(?:AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|USD)/i,
-  /(?:AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|USD)\s*(\d+(?:\.\d{1,3})?)/i,
+  /(\d+(?:\.\d{1,3})?)\s*(AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|USD)/i,
+  /(AED|SAR|QAR|KWD|BHD|OMR|EGP|JOD|LBP|USD)\s*(\d+(?:\.\d{1,3})?)/i,
 ];
 
 function matchPrice(text, url) {
   for (const re of PRICE_PATTERNS) {
     const match = text.match(re);
     if (match) {
-      const price = parseFloat(match[1]);
-      if (price > 0 && price < 100000) return { price, source: url || '' };
+      // Pattern 1: price then currency (match[1]=price, match[2]=currency)
+      // Pattern 2: currency then price (match[1]=currency, match[2]=price)
+      const [price, currency] = /^\d/.test(match[1])
+        ? [parseFloat(match[1]), match[2].toUpperCase()]
+        : [parseFloat(match[2]), match[1].toUpperCase()];
+      if (price > 0 && price < 100000) return { price, currency, source: url || '' };
     }
   }
   return null;
 }
 
-function extractPrice(result) {
+function extractPrice(result, expectedCurrency) {
   const url = result.url || '';
-  // EXA returns summary as plain-text like "priced at AED 3.99" — run patterns on it
   const summary = result?.summary;
   if (summary && typeof summary === 'string') {
-    const fromSummary = matchPrice(summary, url);
-    if (fromSummary) return fromSummary;
+    const hit = matchPrice(summary, url);
+    // Reject if matched currency doesn't match the country we're querying for
+    if (hit && hit.currency !== expectedCurrency) {
+      console.warn(`    [extractPrice] currency mismatch: got ${hit.currency}, expected ${expectedCurrency} — ${url}`);
+      return null;
+    }
+    if (hit) return hit;
   }
   // Fallback: title (no bare-number — too many false positives from weights/codes)
-  return matchPrice(result.title || '', url);
+  const fromTitle = matchPrice(result.title || '', url);
+  if (fromTitle && fromTitle.currency !== expectedCurrency) return null;
+  return fromTitle;
 }
 
 async function fetchGroceryBasketPrices() {
@@ -135,7 +144,7 @@ async function fetchGroceryBasketPrices() {
 
         if (exaResult?.results?.length) {
           for (const result of exaResult.results) {
-            const extracted = extractPrice(result);
+            const extracted = extractPrice(result, country.currency);
             if (extracted) {
               localPrice = extracted.price;
               sourceSite = extracted.source;

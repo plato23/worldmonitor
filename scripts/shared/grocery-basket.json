@@ -1,15 +1,15 @@
 {
   "items": [
-    { "id": "sugar", "name": "Sugar", "query": "sugar 1kg price", "unit": "1kg" },
-    { "id": "salt", "name": "Salt", "query": "salt 1kg price", "unit": "1kg" },
-    { "id": "rice", "name": "Rice", "query": "rice 1kg price", "unit": "1kg" },
-    { "id": "pasta", "name": "Pasta", "query": "pasta 500g price", "unit": "500g" },
+    { "id": "sugar", "name": "Sugar", "query": "white granulated sugar 1kg price", "unit": "1kg" },
+    { "id": "salt", "name": "Salt", "query": "table salt 1kg price", "unit": "1kg" },
+    { "id": "rice", "name": "Rice", "query": "white rice 1kg price", "unit": "1kg" },
+    { "id": "pasta", "name": "Pasta", "query": "spaghetti pasta 500g price", "unit": "500g" },
     { "id": "potatoes", "name": "Potatoes", "query": "potatoes 1kg price", "unit": "1kg" },
-    { "id": "oil", "name": "Cooking Oil", "query": "cooking oil 1L price", "unit": "1L" },
-    { "id": "flour", "name": "Flour", "query": "flour 1kg price", "unit": "1kg" },
-    { "id": "eggs", "name": "Eggs", "query": "eggs 12 pack price", "unit": "12pc" },
-    { "id": "milk", "name": "Milk", "query": "milk 1L price", "unit": "1L" },
-    { "id": "bread", "name": "Bread", "query": "bread loaf price", "unit": "loaf" }
+    { "id": "oil", "name": "Cooking Oil", "query": "sunflower cooking oil 1L price", "unit": "1L" },
+    { "id": "flour", "name": "Flour", "query": "all purpose flour 1kg price", "unit": "1kg" },
+    { "id": "eggs", "name": "Eggs", "query": "fresh eggs 12 pack price", "unit": "12pc" },
+    { "id": "milk", "name": "Milk", "query": "fresh milk 1L price", "unit": "1L" },
+    { "id": "bread", "name": "Bread", "query": "white bread loaf price", "unit": "loaf" }
   ],
   "countries": [
     { "code": "AE", "name": "UAE", "currency": "AED", "flag": "🇦🇪", "sites": ["carrefouruae.com", "gcc.luluhypermarket.com", "noon.com", "amazon.ae"] },
@@ -19,7 +19,7 @@
     { "code": "BH", "name": "Bahrain", "currency": "BHD", "flag": "🇧🇭", "sites": ["gcc.luluhypermarket.com"] },
     { "code": "OM", "name": "Oman", "currency": "OMR", "flag": "🇴🇲", "sites": ["gcc.luluhypermarket.com"] },
     { "code": "EG", "name": "Egypt", "currency": "EGP", "flag": "🇪🇬", "sites": ["carrefouregypt.com", "gcc.luluhypermarket.com", "noon.com"] },
-    { "code": "JO", "name": "Jordan", "currency": "JOD", "flag": "🇯🇴", "sites": ["gcc.luluhypermarket.com"] },
+    { "code": "JO", "name": "Jordan", "currency": "JOD", "flag": "🇯🇴", "sites": ["carrefour.jo", "ounasdelivery.com"] },
     { "code": "LB", "name": "Lebanon", "currency": "LBP", "flag": "🇱🇧", "sites": ["carrefourlebanon.com"] }
   ],
   "fxSymbols": {
