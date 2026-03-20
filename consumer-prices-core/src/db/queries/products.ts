@@ -69,7 +69,8 @@ export async function upsertCanonicalProduct(input: {
        (canonical_name, brand_norm, category, variant_norm, size_value, size_unit,
         base_quantity, base_unit)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-     ON CONFLICT (canonical_name, brand_norm, category, variant_norm, size_value, size_unit)
+     ON CONFLICT (canonical_name, category)
+       WHERE brand_norm IS NULL AND variant_norm IS NULL AND size_value IS NULL AND size_unit IS NULL
      DO UPDATE SET base_quantity = EXCLUDED.base_quantity, base_unit = EXCLUDED.base_unit
      RETURNING id`,
     [
