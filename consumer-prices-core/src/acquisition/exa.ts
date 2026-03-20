@@ -43,7 +43,7 @@ export class ExaProvider implements AcquisitionProvider {
       url: r.url,
       title: r.title ?? '',
       text: r.text,
-      highlights: r.highlights,
+      highlights: (r as Record<string, unknown>).highlights as string[] | undefined,
       score: r.score,
       publishedDate: r.publishedDate,
     }));
