@@ -905,7 +905,7 @@ export class MapPopup {
         if (photoSrc) {
           const photoLink = live.photoLink ? sanitizeUrl(live.photoLink) : '#';
           const credit = live.photoCredit ? `<span class="flight-photo-credit">\u00a9 ${escapeHtml(live.photoCredit)}</span>` : '';
-          photoHtml = `<div class="flight-photo"><a href="${photoLink}" target="_blank" rel="noopener"><img src="${photoSrc}" alt="${escapeHtml(live.callsign)}" loading="lazy" style="width:100%;border-radius:4px;display:block"></a>${credit}</div>`;
+          photoHtml = `<div class="flight-photo"><a href="${photoLink}" target="_blank" rel="noopener"><img src="${photoSrc}" alt="${escapeHtml(live.callsign)}" style="width:100%;border-radius:4px;display:block"></a>${credit}</div>`;
         }
       }
 
@@ -959,7 +959,15 @@ export class MapPopup {
         ${statsHtml}
         ${photoHtml}
       `;
+      // Clamp for text content immediately, then re-clamp once the photo is sized.
       this.clampPopupToViewport();
+      if (photoHtml) {
+        const img = section.querySelector<HTMLImageElement>('img');
+        if (img && !img.complete) {
+          img.addEventListener('load', () => { this.clampPopupToViewport(); }, { once: true });
+          img.addEventListener('error', () => { this.clampPopupToViewport(); }, { once: true });
+        }
+      }
     } catch {
       if (section.isConnected) {
         section.innerHTML = '';
