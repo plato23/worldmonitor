@@ -1,5 +1,6 @@
 // Hand-curated from OpenFlights airlines.dat (public domain), ~100 highest-volume carriers.
-// Override table takes precedence over base entries — add corrections here.
+// To refresh the base map quarterly: node scripts/generate-airline-codes.mjs (script TBD, see issue)
+// To correct individual entries immediately: add to OVERRIDE below (takes precedence over GENERATED).
 const OVERRIDE: Record<string, { iata: string; name: string }> = {
   // Example: 'XYZ': { iata: 'X2', name: 'Corrected Name' },
 };
