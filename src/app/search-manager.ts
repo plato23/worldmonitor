@@ -536,22 +536,35 @@ export class SearchManager implements AppModule {
   updateFlightSource(adsb: PositionSample[], military: MilitaryFlight[]): void {
     if (!this.ctx.searchModal || !isProUser()) return;
     const items = [
-      ...adsb.map(p => ({
-        id: p.icao24,
-        title: (p.callsign || p.icao24).trim().toUpperCase(),
-        subtitle: p.onGround
-          ? t('modals.search.flightOnGround')
-          : t('modals.search.flightAirborne', { fl: String(Math.round(p.altitudeFt / 100)), kts: String(Math.round(p.groundSpeedKts)) }),
-        data: { kind: 'adsb' as const, lat: p.lat, lon: p.lon, layer: 'flights' as const },
-      })),
-      ...military.map(f => ({
-        id: f.hexCode,
-        title: (f.callsign || f.hexCode).trim().toUpperCase(),
-        subtitle: f.onGround
-          ? t('modals.search.flightMilitaryOnGround', { type: f.aircraftType })
-          : t('modals.search.flightMilitary', { type: f.aircraftType, fl: String(Math.round(f.altitude / 100)) }),
-        data: { kind: 'military' as const, lat: f.lat, lon: f.lon, layer: 'military' as const },
-      })),
+      ...adsb.map(p => {
+        const fl = Number.isFinite(p.altitudeFt) ? Math.round(p.altitudeFt / 100) : null;
+        const kts = Number.isFinite(p.groundSpeedKts) ? Math.round(p.groundSpeedKts) : null;
+        return {
+          id: p.icao24,
+          title: (p.callsign || p.icao24).trim().toUpperCase(),
+          subtitle: p.onGround
+            ? t('modals.search.flightOnGround')
+            : fl !== null && kts !== null
+              ? t('modals.search.flightAirborne', { fl: String(fl), kts: String(kts) })
+              : fl !== null
+                ? `FL${fl}`
+                : t('modals.search.flightOnGround'),
+          data: { kind: 'adsb' as const, lat: p.lat, lon: p.lon, layer: 'flights' as const },
+        };
+      }),
+      ...military.map(f => {
+        const fl = Number.isFinite(f.altitude) ? Math.round(f.altitude / 100) : null;
+        return {
+          id: f.hexCode,
+          title: (f.callsign || f.hexCode).trim().toUpperCase(),
+          subtitle: f.onGround
+            ? t('modals.search.flightMilitaryOnGround', { type: f.aircraftType })
+            : fl !== null
+              ? t('modals.search.flightMilitary', { type: f.aircraftType, fl: String(fl) })
+              : t('modals.search.flightMilitaryOnGround', { type: f.aircraftType }),
+          data: { kind: 'military' as const, lat: f.lat, lon: f.lon, layer: 'military' as const },
+        };
+      }),
     ];
     this.ctx.searchModal.registerSource('flight', items);
   }
