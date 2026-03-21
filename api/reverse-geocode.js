@@ -6,7 +6,7 @@ export const config = { runtime: 'edge' };
 const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org/reverse';
 const CHROME_UA = 'WorldMonitor/2.0 (https://worldmonitor.app)';
 
-export default async function handler(req) {
+export default async function handler(req, ctx) {
   if (isDisallowedOrigin(req))
     return new Response('Forbidden', { status: 403 });
 
@@ -72,14 +72,14 @@ export default async function handler(req) {
     const body = JSON.stringify(result);
 
     if (redisUrl && redisToken && country && code) {
-      try {
-        await fetch(redisUrl, {
+      ctx.waitUntil(
+        fetch(redisUrl, {
           method: 'POST',
           headers: { Authorization: `Bearer ${redisToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(['SET', cacheKey, body, 'EX', 604800]),
-          signal: AbortSignal.timeout(2000),
-        });
-      } catch { /* cache write failed or timed out, non-critical */ }
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => {}),
+      );
     }
 
     return new Response(body, {
