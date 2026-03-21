@@ -170,7 +170,7 @@ const RPC_CACHE_TIER: Record<string, CacheTier> = {
   '/api/consumer-prices/v1/list-retailer-price-spreads': 'static',
   '/api/consumer-prices/v1/get-consumer-price-freshness': 'slow',
 
-  '/api/aviation/v1/get-youtube-live-stream-info': 'no-store',
+  '/api/aviation/v1/get-youtube-live-stream-info': 'fast',
 };
 
 const PREMIUM_RPC_PATHS = new Set([
