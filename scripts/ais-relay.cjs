@@ -3123,13 +3123,68 @@ async function handleWingbitsTrackRequest(req, res) {
   const lomaxStr = params.get('lomax');
 
   // For callsign-only searches (no bbox), serve from the in-memory position index populated
-  // by recent bbox responses. A worldwide Wingbits API call is unreliable (too large an area).
+  // by recent bbox responses. On index miss, fall back to a global Wingbits API call.
   const isBboxMissing = !laminStr || !lominStr || !lamaxStr || !lomaxStr;
   if (callsignFilter && isBboxMissing) {
     const hits = wingbitsIndexLookupCallsign(callsignFilter);
+    if (hits.length > 0) {
+      return sendCompressed(req, res, 200,
+        { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        JSON.stringify({ positions: hits, source: 'wingbits' }));
+    }
+    // Index miss — flight not in any recent viewport. Try a global Wingbits API call.
+    try {
+      const globalAreas = [{ alias: 'global', by: 'box', la: 0, lo: 0, w: 21600, h: 10800, unit: 'nm' }];
+      const gbResp = await fetch('https://customer-api.wingbits.com/v1/flights', {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey, Accept: 'application/json', 'Content-Type': 'application/json', 'User-Agent': CHROME_UA },
+        body: JSON.stringify(globalAreas),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (gbResp.ok) {
+        const gbData = await gbResp.json();
+        if (Array.isArray(gbData)) {
+          const now = Date.now();
+          const positions = [];
+          const seenIds = new Set();
+          for (const areaResult of gbData) {
+            const flightList = Array.isArray(areaResult.data) ? areaResult.data
+              : Array.isArray(areaResult.flights) ? areaResult.flights
+              : Array.isArray(areaResult) ? areaResult : [];
+            for (const f of flightList) {
+              const icao24 = f.h || f.icao24 || f.id || '';
+              if (!icao24 || seenIds.has(icao24)) continue;
+              const cs = (f.f || f.callsign || f.flight || '').trim().toUpperCase();
+              if (!cs.includes(callsignFilter)) continue;
+              seenIds.add(icao24);
+              positions.push({
+                icao24,
+                callsign: (f.f || f.callsign || f.flight || '').trim(),
+                lat: f.la ?? f.latitude ?? f.lat ?? 0,
+                lon: f.lo ?? f.longitude ?? f.lon ?? f.lng ?? 0,
+                altitudeM: (f.ab ?? f.altitude ?? f.alt ?? 0) * 0.3048,
+                groundSpeedKts: f.gs ?? f.groundSpeed ?? f.speed ?? 0,
+                trackDeg: f.th ?? f.heading ?? f.track ?? 0,
+                verticalRate: 0,
+                onGround: f.og ?? f.gr ?? f.onGround ?? false,
+                source: 'POSITION_SOURCE_WINGBITS',
+                observedAt: f.ra ? new Date(f.ra).getTime() : now,
+              });
+            }
+          }
+          wingbitsIndexUpdate(positions);
+          logThrottled('log', 'wingbits-callsign-global', `[Wingbits Track] global callsign fallback: ${positions.length} hits for "${callsignFilter}"`);
+          return sendCompressed(req, res, 200,
+            { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+            JSON.stringify({ positions, source: 'wingbits' }));
+        }
+      }
+    } catch (err) {
+      console.warn(`[Wingbits Track] Global callsign fallback failed: ${err?.message || err}`);
+    }
     return sendCompressed(req, res, 200,
       { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-      JSON.stringify({ positions: hits, source: 'wingbits' }));
+      JSON.stringify({ positions: [], source: 'wingbits' }));
   }
 
   if (isBboxMissing) {
