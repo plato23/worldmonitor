@@ -214,4 +214,10 @@ async function main() {
 // process.exit() is required to flush lingering Playwright/Chromium handles
 // that would otherwise prevent the process from exiting naturally.
 // process.exitCode preserves failure signaling set in the catch block above.
-main().catch(() => { process.exitCode = 1; }).then(() => process.exit(process.exitCode ?? 0));
+// Hard-kill timer: if browser.close() hangs despite the teardown timeout,
+// force exit after 12 minutes so the && chain (aggregate, publish) still runs.
+const _hardKill = setTimeout(() => {
+  console.warn('[scrape] hard timeout reached — forcing exit');
+  process.exit(process.exitCode ?? 0);
+}, 12 * 60 * 1000);
+main().catch(() => { process.exitCode = 1; }).then(() => { clearTimeout(_hardKill); process.exit(process.exitCode ?? 0); });
