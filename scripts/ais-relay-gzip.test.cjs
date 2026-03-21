@@ -16,11 +16,9 @@ const zlib = require('node:zlib');
 const { readFileSync } = require('node:fs');
 const { resolve } = require('node:path');
 
-// ─── Extract _collectDecompressed via source inspection ───
-// The function is not exported, so we verify its implementation structurally
-// and test an identical copy to prove the maxBytes branch works.
-
-const relaySrc = readFileSync(resolve(__dirname, 'ais-relay.cjs'), 'utf-8');
+const relaySrc = readFileSync(resolve(__dirname, '_relay-decompress.cjs'), 'utf-8');
+const relayCjs = readFileSync(resolve(__dirname, 'ais-relay.cjs'), 'utf-8');
+const { _collectDecompressed } = require('./_relay-decompress.cjs');
 
 describe('_collectDecompressed source contract', () => {
   it('accepts maxBytes parameter', () => {
@@ -67,36 +65,12 @@ describe('_collectDecompressed source contract', () => {
   });
 
   it('CelesTrak fetch uses maxBytes=2MB', () => {
-    assert.ok(relaySrc.includes('_collectDecompressed(resp, 2 * 1024 * 1024)'),
+    assert.ok(relayCjs.includes('_collectDecompressed(resp, 2 * 1024 * 1024)'),
       'CelesTrak TLE fetch must pass 2MB limit to _collectDecompressed');
   });
 });
 
-// ─── Behavioral tests using identical implementation ───
-// Replicate the exact function to test runtime behavior.
-
-function _collectDecompressed(response, maxBytes) {
-  return new Promise((resolve, reject) => {
-    const enc = (response.headers?.['content-encoding'] || '').trim().toLowerCase();
-    let stream = response;
-    if (enc === 'gzip' || enc === 'x-gzip') stream = response.pipe(zlib.createGunzip());
-    else if (enc === 'deflate') stream = response.pipe(zlib.createInflate());
-    else if (enc === 'br') stream = response.pipe(zlib.createBrotliDecompress());
-    const chunks = [];
-    let totalSize = 0;
-    stream.on('data', chunk => {
-      totalSize += chunk.length;
-      if (maxBytes && totalSize > maxBytes) {
-        stream.destroy();
-        response.destroy();
-        return reject(new Error(`payload exceeds ${maxBytes} byte limit (${totalSize} bytes decompressed)`));
-      }
-      chunks.push(chunk);
-    });
-    stream.on('end', () => resolve(Buffer.concat(chunks).toString()));
-    stream.on('error', (err) => reject(new Error(`decompression failed (${enc}): ${err.message}`)));
-  });
-}
+// ─── Behavioral tests using real implementation ───
 
 function makeGzipStream(data) {
   const compressed = zlib.gzipSync(data);
