@@ -45,6 +45,9 @@ const BOOTSTRAP_KEYS = {
   groceryBasket:     'economic:grocery-basket:v1',
   bigmac:            'economic:bigmac:v1',
   nationalDebt:      'economic:national-debt:v1',
+  defiTokens:        'market:defi-tokens:v1',
+  aiTokens:          'market:ai-tokens:v1',
+  otherTokens:       'market:other-tokens:v1',
 };
 
 const STANDALONE_KEYS = {
@@ -153,6 +156,7 @@ const SEED_META = {
   consumerPricesMovers:     { key: 'seed-meta:consumer-prices:movers:ae:30d',               maxStaleMin: 90 },
   consumerPricesSpread:     { key: 'seed-meta:consumer-prices:retailer-spread:ae:essentials-ae', maxStaleMin: 120 }, // TTL=60min; 2× interval
   consumerPricesFreshness:  { key: 'seed-meta:consumer-prices:freshness:ae',    maxStaleMin: 30  }, // TTL=10min; 3× interval
+  tokenPanels:       { key: 'seed-meta:market:token-panels',                   maxStaleMin: 90 }, // cron every 30min; 3× interval
 };
 
 // Standalone keys that are populated on-demand by RPC handlers (not seeds).
