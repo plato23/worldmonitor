@@ -1677,12 +1677,12 @@ function extractAllHeadlines(newsInsights, newsDigest) {
 }
 
 const CRITICAL_NEWS_ROUTE_RE = /\b(hormuz|strait of hormuz|bab el[- ]mandeb|suez|red sea|black sea|baltic sea|kerch|shipping lane|shipping route|trade corridor|canal|port|terminal)\b/i;
-const CRITICAL_NEWS_BLOCKAGE_RE = /\b(block(?:ade|ed|ing)?|clos(?:e|ed|ure|ing)|shut(?:ting)?|halt(?:ed|ing)?|suspend(?:ed|ing)?|interrupt(?:ed|ion)?|rerout(?:e|ed|ing)?|seiz(?:e|ed|ure)|interdict(?:ed|ion)?|mine(?:d|s)?)\b/i;
-const CRITICAL_NEWS_ATTACK_RE = /\b(attack(?:ed|s)?|strike|struck|drone|missile|rocket|blast|explosion|fire|burn(?:ing)?|hit|damage(?:d)?|sabotage)\b/i;
+const CRITICAL_NEWS_BLOCKAGE_RE = /\b(block(?:ade|ed|ing|s)?|clos(?:e|ed|ure|ing)|shut(?:ting)?|halt(?:ed|ing)?|suspend(?:ed|ing)?|interrupt(?:ed|ion)?|rerout(?:e|ed|ing)?|seiz(?:e|ed|ure)|interdict(?:ed|ion)?|mine(?:d|s)?)\b/i;
+const CRITICAL_NEWS_ATTACK_RE = /\b(attack(?:ed|s)?|air ?strike(?:s)?|strike(?:s)?|struck|drone|missile|rocket|blast|explosion|fire|burn(?:ing)?|hit|damage(?:d)?|sabotage)\b/i;
 const CRITICAL_NEWS_ENERGY_RE = /\b(oil|crude|gas|lng|liquefied natural gas|refiner(?:y|ies)|pipeline|terminal|export terminal|petrochemical|storage tank|tank farm|fuel depot|processing plant|tanker)\b/i;
 const CRITICAL_NEWS_LNG_RE = /\b(lng|liquefied natural gas|ras laffan|north field|south pars|gas field|gas export|gas terminal)\b/i;
 const CRITICAL_NEWS_REFINERY_RE = /\b(refiner(?:y|ies)|petrochemical|fuel depot|oil terminal|storage tank|tank farm|processing plant)\b/i;
-const CRITICAL_NEWS_SANCTIONS_RE = /\b(sanction|embargo|export control|blacklist|freeze(?:d)? assets|price cap|trade ban|shipping ban)\b/i;
+const CRITICAL_NEWS_SANCTIONS_RE = /\b(sanction(?:s|ing|ed)?|embargo|export control|blacklist|freeze(?:d)? assets|price cap|trade ban|shipping ban)\b/i;
 const CRITICAL_NEWS_ULTIMATUM_RE = /\b(ultimatum|deadline|final warning|48-hour|72-hour|must reopen|must withdraw|or face)\b/i;
 const CRITICAL_NEWS_POWER_RE = /\b(power station|power plant|grid|substation|electricity|blackout)\b/i;
 const CRITICAL_NEWS_SOURCE_TYPES = new Set(['critical_news', 'iran_events', 'sanctions_pressure', 'thermal_escalation']);
@@ -1954,7 +1954,7 @@ function extractCriticalNewsSignals(inputs) {
     const acuteStatus = cluster?.status === 'THERMAL_STATUS_SPIKE' || cluster?.status === 'THERMAL_STATUS_PERSISTENT';
     if (!highRelevance || !acuteStatus || cluster?.context !== 'THERMAL_CONTEXT_CONFLICT_ADJACENT') continue;
     const region = cluster?.countryName || cluster?.regionLabel || '';
-    const macroRegion = getMacroRegion([region]) || getMacroRegion(['Middle East']) || '';
+    const macroRegion = getMacroRegion([region]) || '';
     pushCriticalSignal(signals, 'infrastructure_capacity_loss', 'thermal_escalation', `${region || 'Conflict-adjacent'} thermal escalation is threatening infrastructure`, {
       sourceKey: `thermal_escalation:${cluster?.id || region}:infrastructure`,
       region,
@@ -1967,7 +1967,7 @@ function extractCriticalNewsSignals(inputs) {
         `${cluster?.observationCount || 0} observations with total FRP ${cluster?.totalFrp || 0}`,
       ],
     });
-    if (/\b(qatar|iran|iraq|kuwait|saudi|united arab emirates|uae)\b/i.test(region)) {
+    if (/\b(qatar|iran|iraq|kuwait|saudi|united arab emirates|uae|oman|bahrain|libya)\b/i.test(region)) {
       pushCriticalSignal(signals, 'energy_supply_shock', 'thermal_escalation', `${region || 'Conflict-adjacent'} thermal escalation is threatening energy throughput`, {
         sourceKey: `thermal_escalation:${cluster?.id || region}:energy`,
         region,
@@ -6678,6 +6678,19 @@ function normalizeSignalStrength(value, min = 0, max = 1) {
   return +Math.max(0, Math.min(1, normalize(value, min, max))).toFixed(3);
 }
 
+function mergeSignalLists(primary = [], secondary = [], limit = 3) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...primary, ...secondary]) {
+    const value = String(item || '').trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    merged.push(value);
+    if (merged.length >= limit) break;
+  }
+  return merged;
+}
+
 function buildWorldSignal(type, sourceType, label, patch = {}) {
   return {
     id: `sig-${createStableHash(`${type}:${sourceType}:${label}:${patch.region || ''}:${patch.sourceKey || ''}`)}`,
@@ -7181,11 +7194,23 @@ function buildWorldSignals(inputs, predictions = [], _situationClusters = []) {
   }
 
   const dedupedSignals = [];
-  const seen = new Set();
+  const dedupedSignalIndex = new Map();
   for (const signal of signals) {
-    const key = `${signal.type}:${signal.sourceKey}:${signal.region}:${signal.label}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const key = CRITICAL_NEWS_SOURCE_TYPES.has(signal.sourceType)
+      ? `${signal.type}:${signal.region}:${signal.label}`
+      : `${signal.type}:${signal.sourceKey}:${signal.region}:${signal.label}`;
+    const existingIndex = dedupedSignalIndex.get(key);
+    if (existingIndex != null) {
+      const existing = dedupedSignals[existingIndex];
+      existing.strength = Math.max(existing.strength, signal.strength);
+      existing.confidence = Math.max(existing.confidence, signal.confidence);
+      existing.countries = uniqueSortedStrings([...(existing.countries || []), ...(signal.countries || [])]);
+      existing.actors = uniqueSortedStrings([...(existing.actors || []), ...(signal.actors || [])]);
+      existing.domains = uniqueSortedStrings([...(existing.domains || []), ...(signal.domains || [])]);
+      existing.supportingEvidence = mergeSignalLists(existing.supportingEvidence, signal.supportingEvidence, 3);
+      continue;
+    }
+    dedupedSignalIndex.set(key, dedupedSignals.length);
     dedupedSignals.push(signal);
   }
 

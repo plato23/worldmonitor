@@ -2523,6 +2523,125 @@ describe('critical news signal extraction', () => {
     assert.ok(sourceTypes.has('thermal_escalation'));
   });
 
+  it('recognizes plural sanctions, airstrike, and blocks phrasing in critical headlines', () => {
+    const signals = extractCriticalNewsSignals({
+      newsInsights: {
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        topStories: [
+          {
+            primaryTitle: 'US issues fresh sanctions on Iran shipping network',
+            primaryLink: 'https://example.com/sanctions',
+            threatLevel: 'high',
+            sourceCount: 3,
+            isAlert: true,
+            pubDate: '2026-03-22T11:55:00.000Z',
+          },
+          {
+            primaryTitle: 'Airstrike on oil terminal in Qatar disrupts exports',
+            primaryLink: 'https://example.com/airstrike',
+            threatLevel: 'critical',
+            sourceCount: 4,
+            isAlert: true,
+            pubDate: '2026-03-22T11:50:00.000Z',
+          },
+          {
+            primaryTitle: 'Iran blocks access to canal after ultimatum',
+            primaryLink: 'https://example.com/blocks',
+            threatLevel: 'high',
+            sourceCount: 3,
+            isAlert: true,
+            pubDate: '2026-03-22T11:45:00.000Z',
+          },
+        ],
+      },
+    });
+
+    assert.ok(signals.some((signal) => signal.sourceType === 'critical_news' && signal.type === 'sovereign_stress'));
+    assert.ok(signals.some((signal) => signal.sourceType === 'critical_news' && signal.type === 'energy_supply_shock'));
+    assert.ok(signals.some((signal) => signal.sourceType === 'critical_news' && signal.type === 'shipping_cost_shock'));
+  });
+
+  it('extends thermal energy sensitivity to Oman and does not force unknown thermal regions into MENA', () => {
+    const signals = extractCriticalNewsSignals({
+      thermalEscalation: {
+        clusters: [
+          {
+            id: 'th-oman',
+            countryCode: 'OM',
+            countryName: 'Oman',
+            regionLabel: 'Oman',
+            observationCount: 10,
+            totalFrp: 190,
+            persistenceHours: 16,
+            status: 'THERMAL_STATUS_PERSISTENT',
+            context: 'THERMAL_CONTEXT_CONFLICT_ADJACENT',
+            confidence: 'THERMAL_CONFIDENCE_HIGH',
+            strategicRelevance: 'THERMAL_RELEVANCE_HIGH',
+          },
+          {
+            id: 'th-unknown',
+            countryCode: 'XX',
+            countryName: 'Unknown Energy Province',
+            regionLabel: 'Unknown Energy Province',
+            observationCount: 8,
+            totalFrp: 170,
+            persistenceHours: 13,
+            status: 'THERMAL_STATUS_SPIKE',
+            context: 'THERMAL_CONTEXT_CONFLICT_ADJACENT',
+            confidence: 'THERMAL_CONFIDENCE_HIGH',
+            strategicRelevance: 'THERMAL_RELEVANCE_HIGH',
+          },
+        ],
+      },
+    });
+
+    const omanEnergy = signals.find((signal) => signal.sourceType === 'thermal_escalation' && signal.type === 'energy_supply_shock' && signal.region === 'Oman');
+    const unknownInfra = signals.find((signal) => signal.sourceType === 'thermal_escalation' && signal.type === 'infrastructure_capacity_loss' && signal.region === 'Unknown Energy Province');
+
+    assert.ok(omanEnergy, 'Oman thermal escalation should now be treated as energy-sensitive');
+    assert.equal(unknownInfra?.macroRegion || '', '', 'unknown thermal regions should not be forced into MENA');
+  });
+
+  it('dedupes corroborated critical events across news and iran event sources in world signals', () => {
+    const worldState = buildForecastRunWorldState({
+      generatedAt: Date.parse('2026-03-22T12:00:00Z'),
+      predictions: [],
+      inputs: {
+        newsInsights: {
+          generatedAt: '2026-03-22T12:00:00.000Z',
+          topStories: [
+            {
+              primaryTitle: 'Attack reported near Ras Laffan LNG export terminal in Qatar',
+              primaryLink: 'https://example.com/ras-laffan-story',
+              threatLevel: 'critical',
+              sourceCount: 4,
+              isAlert: true,
+              pubDate: '2026-03-22T11:45:00.000Z',
+            },
+          ],
+        },
+        iranEvents: {
+          events: [
+            {
+              id: 'ie-ras-laffan',
+              title: 'Missile strike reported near Ras Laffan LNG terminal',
+              category: 'airstrike',
+              severity: 'critical',
+              locationName: 'qatar',
+            },
+          ],
+        },
+      },
+    });
+
+    const criticalSignals = worldState.worldSignals?.criticalSignals || [];
+    const lngSignals = criticalSignals.filter((signal) => signal.type === 'gas_supply_stress' && signal.label === 'Middle East LNG and gas export stress');
+    const energySignals = criticalSignals.filter((signal) => signal.type === 'energy_supply_shock' && signal.label === 'Middle East energy infrastructure stress');
+
+    assert.equal(lngSignals.length, 1);
+    assert.equal(energySignals.length, 1);
+  });
+
   it('does not promote generic political headlines into critical world signals', () => {
     const signals = extractCriticalNewsSignals({
       newsInsights: {
