@@ -189,13 +189,16 @@ async function afterPublish(data, _meta) {
   }
 }
 
-runSeed('intelligence', 'gdelt-intel', CANONICAL_KEY, fetchAllTopics, {
-  validateFn: validate,
-  ttlSeconds: CACHE_TTL,
-  sourceVersion: 'gdelt-doc-v2',
-  publishTransform,
-  afterPublish,
-}).catch((err) => {
-  const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : ''; console.error('FATAL:', (err.message || err) + _cause);
-  process.exit(1);
-});
+if (process.argv[1]?.endsWith('seed-gdelt-intel.mjs')) {
+  runSeed('intelligence', 'gdelt-intel', CANONICAL_KEY, fetchAllTopics, {
+    validateFn: validate,
+    ttlSeconds: CACHE_TTL,
+    sourceVersion: 'gdelt-doc-v2',
+    publishTransform,
+    afterPublish,
+  }).catch((err) => {
+    const _cause = err.cause ? ` (cause: ${err.cause.message || err.cause.code || err.cause})` : '';
+    console.error('FATAL:', (err.message || err) + _cause);
+    process.exit(1);
+  });
+}
