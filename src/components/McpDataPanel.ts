@@ -4,8 +4,8 @@ import { t } from '@/services/i18n';
 import { h } from '@/utils/dom-utils';
 import { proxyUrl, widgetAgentUrl } from '@/utils/proxy';
 import { escapeHtml } from '@/utils/sanitize';
-import { isWidgetFeatureEnabled, isProWidgetEnabled, getWidgetAgentKey, getProWidgetKey } from '@/services/widget-store';
-import { wrapWidgetHtml, wrapProWidgetHtml } from '@/utils/widget-sanitizer';
+import { isProWidgetEnabled, getWidgetAgentKey, getProWidgetKey } from '@/services/widget-store';
+import { wrapProWidgetHtml } from '@/utils/widget-sanitizer';
 
 type McpResult = {
   content?: Array<{ type: string; text?: string }>;
@@ -111,13 +111,12 @@ export class McpDataPanel extends Panel {
   private renderResult(result: McpResult): void {
     const jsonData = this.extractJsonData(result);
 
-    if (jsonData !== null && isWidgetFeatureEnabled()) {
+    if (jsonData !== null && isProWidgetEnabled()) {
       const hash = JSON.stringify(jsonData).slice(0, 1000);
       if (hash === this.lastJsonHash && this.cachedWidgetHtml) {
-        const wrapped = isProWidgetEnabled() ? wrapProWidgetHtml(this.cachedWidgetHtml) : wrapWidgetHtml(this.cachedWidgetHtml);
         this.setContent(`
           <div class="mcp-panel-meta">${this.buildMetaLine()}</div>
-          <div class="mcp-panel-content mcp-panel-widget">${wrapped}</div>
+          <div class="mcp-panel-content mcp-panel-widget">${wrapProWidgetHtml(this.cachedWidgetHtml)}</div>
         `);
         return;
       }
@@ -163,23 +162,19 @@ export class McpDataPanel extends Panel {
       </div>
     `);
 
-    const isPro = isProWidgetEnabled();
-    const tier = isPro ? 'pro' : 'basic';
     const preview = JSON.stringify(jsonData, null, 2).slice(0, 3000);
     const prompt = `Create a compact, interactive data visualization widget for this ${this.spec.toolName} data. Choose the best format (charts, tables, cards). Data:\n${preview}`;
 
     try {
-      const reqHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'X-Widget-Key': getWidgetAgentKey(),
-      };
-      if (isPro) reqHeaders['X-Pro-Key'] = getProWidgetKey();
-
       const res = await fetch(widgetAgentUrl(), {
         method: 'POST',
-        headers: reqHeaders,
-        body: JSON.stringify({ prompt, mode: 'create', tier }),
-        signal: AbortSignal.timeout(isPro ? 120_000 : 90_000),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Widget-Key': getWidgetAgentKey(),
+          'X-Pro-Key': getProWidgetKey(),
+        },
+        body: JSON.stringify({ prompt, mode: 'create', tier: 'pro' }),
+        signal: AbortSignal.timeout(120_000),
       });
 
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -204,10 +199,9 @@ export class McpDataPanel extends Panel {
             resultHtml = String(event.html ?? '');
           } else if (event.type === 'done') {
             this.cachedWidgetHtml = resultHtml;
-            const wrapped = isPro ? wrapProWidgetHtml(resultHtml) : wrapWidgetHtml(resultHtml);
             this.setContent(`
               <div class="mcp-panel-meta">${this.buildMetaLine()}</div>
-              <div class="mcp-panel-content mcp-panel-widget">${wrapped}</div>
+              <div class="mcp-panel-content mcp-panel-widget">${wrapProWidgetHtml(resultHtml)}</div>
             `);
           } else if (event.type === 'error') {
             throw new Error(String(event.message ?? t('mcp.visualizationFailed')));
