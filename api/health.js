@@ -35,6 +35,7 @@ const BOOTSTRAP_KEYS = {
   forecasts:         'forecast:predictions:v2',
   securityAdvisories: 'intelligence:advisories-bootstrap:v1',
   customsRevenue:    'trade:customs-revenue:v1',
+  comtradeFlows:     'comtrade:flows:v1',
   sanctionsPressure: 'sanctions:pressure:v1',
   sanctionsEntities: 'sanctions:entities:v1',
   radiationWatch:    'radiation:observations:v1',
@@ -145,6 +146,7 @@ const SEED_META = {
   usniFleet:           { key: 'seed-meta:military:usni-fleet',               maxStaleMin: 480 },
   securityAdvisories:  { key: 'seed-meta:intelligence:advisories',           maxStaleMin: 120 },
   customsRevenue:      { key: 'seed-meta:trade:customs-revenue',              maxStaleMin: 1440 },
+  comtradeFlows:       { key: 'seed-meta:trade:comtrade-flows',               maxStaleMin: 1440 }, // daily seed
   sanctionsPressure:   { key: 'seed-meta:sanctions:pressure',                 maxStaleMin: 1440 }, // 12h cron; 1440min = 24h = 2x interval
   sanctionsEntities:   { key: 'seed-meta:sanctions:entities',                 maxStaleMin: 1440 }, // 12h cron; 1440min = 24h = 2x interval
   radiationWatch:      { key: 'seed-meta:radiation:observations',             maxStaleMin: 30 },
