@@ -49,16 +49,22 @@ export const DiscoverySeedSchema = z.object({
   category: z.string().optional(),
 });
 
+export const SearchConfigSchema = z.object({
+  numResults: z.number().default(3),
+  queryTemplate: z.string().optional(),
+});
+
 export const RetailerConfigSchema = z.object({
   retailer: z.object({
     slug: z.string(),
     name: z.string(),
     marketCode: z.string().length(2),
     currencyCode: z.string().length(3),
-    adapter: z.enum(['generic', 'exa-search', 'custom']).default('generic'),
+    adapter: z.enum(['generic', 'exa-search', 'search', 'custom']).default('generic'),
     baseUrl: z.string().url(),
     rateLimit: RateLimitSchema.optional(),
-    acquisition: AcquisitionConfigSchema,
+    acquisition: AcquisitionConfigSchema.optional(),
+    searchConfig: SearchConfigSchema.optional(),
     discovery: z.object({
       mode: z.enum(['category_urls', 'sitemap', 'search']).default('category_urls'),
       seeds: z.array(DiscoverySeedSchema),
@@ -81,6 +87,7 @@ export const RetailerConfigSchema = z.object({
 });
 
 export type RetailerConfig = z.infer<typeof RetailerConfigSchema>['retailer'];
+export type SearchConfig = z.infer<typeof SearchConfigSchema>;
 
 export const BasketItemSchema = z.object({
   id: z.string(),

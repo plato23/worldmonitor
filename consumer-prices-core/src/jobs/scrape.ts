@@ -10,6 +10,9 @@ import { loadAllRetailerConfigs, loadRetailerConfig } from '../config/loader.js'
 import { initProviders, teardownAll } from '../acquisition/registry.js';
 import { GenericPlaywrightAdapter } from '../adapters/generic.js';
 import { ExaSearchAdapter } from '../adapters/exa-search.js';
+import { SearchAdapter } from '../adapters/search.js';
+import { ExaProvider } from '../acquisition/exa.js';
+import { FirecrawlProvider } from '../acquisition/firecrawl.js';
 import type { AdapterContext } from '../adapters/types.js';
 import { upsertCanonicalProduct } from '../db/queries/products.js';
 import { getBasketItemId, upsertProductMatch } from '../db/queries/matches.js';
@@ -73,12 +76,19 @@ export async function scrapeRetailer(slug: string) {
 
   logger.info(`Run ${runId} started for ${slug}`);
 
+  const exaKey = (process.env.EXA_API_KEYS || process.env.EXA_API_KEY || '').split(/[\n,]+/)[0].trim();
+  const fcKey = process.env.FIRECRAWL_API_KEY ?? '';
+
+  if (config.adapter === 'search') {
+    if (!exaKey) throw new Error(`search adapter requires EXA_API_KEY / EXA_API_KEYS (retailer: ${slug})`);
+    if (!fcKey) throw new Error(`search adapter requires FIRECRAWL_API_KEY (retailer: ${slug})`);
+  }
+
   const adapter =
-    config.adapter === 'exa-search'
-      ? new ExaSearchAdapter(
-          (process.env.EXA_API_KEYS || process.env.EXA_API_KEY || '').split(/[\n,]+/)[0].trim(),
-          process.env.FIRECRAWL_API_KEY,
-        )
+    config.adapter === 'search'
+      ? new SearchAdapter(new ExaProvider(exaKey), new FirecrawlProvider(fcKey))
+      : config.adapter === 'exa-search'
+      ? new ExaSearchAdapter(exaKey, process.env.FIRECRAWL_API_KEY)
       : new GenericPlaywrightAdapter();
   const ctx: AdapterContext = { config, runId, logger };
 

@@ -3,13 +3,13 @@ retailer:
   name: Noon Grocery UAE
   marketCode: ae
   currencyCode: AED
-  adapter: exa-search
+  adapter: search
   baseUrl: https://www.noon.com
   enabled: true
 
-  acquisition:
-    provider: exa
-    searchQueryTemplate: "{canonicalName} grocery fresh food {currency} {market}"
+  searchConfig:
+    numResults: 3
+    queryTemplate: "{canonicalName} grocery fresh food {currency} {market}"
 
   rateLimit:
     requestsPerMinute: 10

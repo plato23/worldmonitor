@@ -3,13 +3,13 @@ retailer:
   name: Lulu Hypermarket UAE
   marketCode: ae
   currencyCode: AED
-  adapter: exa-search
+  adapter: search
   baseUrl: https://www.luluhypermarket.com
   enabled: true
 
-  acquisition:
-    provider: exa
-    searchQueryTemplate: "{canonicalName} {currency} {market} price"
+  searchConfig:
+    numResults: 3
+    queryTemplate: "{canonicalName} {currency} {market} price"
 
   rateLimit:
     requestsPerMinute: 15
