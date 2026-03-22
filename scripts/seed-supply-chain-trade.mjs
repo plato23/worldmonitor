@@ -15,7 +15,8 @@ const KEYS = {
 
 const SHIPPING_TTL = 3600;
 const TRADE_TTL = 21600;
-const CUSTOMS_TTL = 86400;
+const TARIFF_TTL = 28800; // 8h — 2h buffer over 6h cron cadence (was TRADE_TTL=6h = 0 buffer)
+const CUSTOMS_TTL = 86400; // 24h — monthly Treasury data, matches maxStaleMin:1440 (was TRADE_TTL=6h = 0 buffer)
 
 const MAJOR_REPORTERS = ['840', '156', '276', '392', '826', '356', '076', '643', '410', '036', '124', '484', '250', '380', '528'];
 
@@ -583,7 +584,7 @@ async function fetchAll() {
   if (ba) await writeExtraKeyWithMeta(KEYS.barriers, ba, TRADE_TTL, ba.barriers?.length ?? 0);
   if (re) await writeExtraKeyWithMeta(KEYS.restrictions, re, TRADE_TTL, re.restrictions?.length ?? 0);
   if (fl) { for (const [key, data] of Object.entries(fl)) await writeExtraKeyWithMeta(key, data, TRADE_TTL, data.flows?.length ?? 0); }
-  if (ta) { for (const [key, data] of Object.entries(ta)) await writeExtraKeyWithMeta(key, data, TRADE_TTL, data.datapoints?.length ?? 0); }
+  if (ta) { for (const [key, data] of Object.entries(ta)) await writeExtraKeyWithMeta(key, data, TARIFF_TTL, data.datapoints?.length ?? 0); }
   if (cu) await writeExtraKeyWithMeta(KEYS.customsRevenue, cu, CUSTOMS_TTL, cu.months?.length ?? 0);
 
   return mergedIndices.length > 0

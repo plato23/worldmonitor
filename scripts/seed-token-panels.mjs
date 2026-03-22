@@ -11,7 +11,7 @@ loadEnvFile(import.meta.url);
 const DEFI_KEY = 'market:defi-tokens:v1';
 const AI_KEY = 'market:ai-tokens:v1';
 const OTHER_KEY = 'market:other-tokens:v1';
-const CACHE_TTL = 3600;
+const CACHE_TTL = 5400; // 90min — 1h buffer over 30min cron cadence (was 60min = 30min buffer)
 
 const ALL_IDS = [...new Set([...defiConfig.ids, ...aiConfig.ids, ...otherConfig.ids])];
 const COINPAPRIKA_ID_MAP = { ...defiConfig.coinpaprika, ...aiConfig.coinpaprika, ...otherConfig.coinpaprika };

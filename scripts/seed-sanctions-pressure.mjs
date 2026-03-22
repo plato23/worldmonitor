@@ -12,7 +12,7 @@ loadEnvFile(import.meta.url);
 
 const CANONICAL_KEY = 'sanctions:pressure:v1';
 const STATE_KEY = 'sanctions:pressure:state:v1';
-const CACHE_TTL = 12 * 60 * 60;
+const CACHE_TTL = 15 * 60 * 60; // 15h — 3h buffer over 12h cron cadence (was 12h = 0 buffer)
 const DEFAULT_RECENT_LIMIT = 60;
 const OFAC_TIMEOUT_MS = 45_000;
 const PROGRAM_CODE_RE = /^[A-Z0-9][A-Z0-9-]{1,24}$/;

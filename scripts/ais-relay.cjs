@@ -1582,7 +1582,7 @@ const _cryptoCfg = requireShared('crypto.json');
 const CRYPTO_IDS = _cryptoCfg.ids;
 const CRYPTO_META = _cryptoCfg.meta;
 const CRYPTO_PAPRIKA_MAP = _cryptoCfg.coinpaprika;
-const CRYPTO_SEED_TTL = 3600; // 1h
+const CRYPTO_SEED_TTL = 7200; // 2h — 1h buffer over 5min cron cadence (was 1h = 55min buffer)
 
 async function fetchCryptoCoinPaprika() {
   const data = await cyberHttpGetJson('https://api.coinpaprika.com/v1/tickers?quotes=USD', { Accept: 'application/json' }, 15000);
@@ -1628,7 +1628,7 @@ async function seedCryptoQuotes() {
 // Stablecoin Markets — CoinGecko → CoinPaprika fallback
 const STABLECOIN_IDS = 'tether,usd-coin,dai,first-digital-usd,ethena-usde';
 const STABLECOIN_PAPRIKA_MAP = { tether: 'usdt-tether', 'usd-coin': 'usdc-usd-coin', dai: 'dai-dai', 'first-digital-usd': 'fdusd-first-digital-usd', 'ethena-usde': 'usde-ethena-usde' };
-const STABLECOIN_SEED_TTL = 3600; // 1h
+const STABLECOIN_SEED_TTL = 7200; // 2h — 1h buffer over 5min cron cadence (was 1h = 55min buffer)
 
 async function fetchStablecoinCoinPaprika() {
   const data = await cyberHttpGetJson('https://api.coinpaprika.com/v1/tickers?quotes=USD', { Accept: 'application/json' }, 15000);
@@ -1678,7 +1678,7 @@ async function seedStablecoinMarkets() {
 // Crypto Sectors Heatmap — CoinGecko sector averages
 const _sectorsCfg = requireShared('crypto-sectors.json');
 const SECTORS_LIST = _sectorsCfg.sectors;
-const SECTORS_SEED_TTL = 3600; // 1h
+const SECTORS_SEED_TTL = 7200; // 2h — 1h buffer over 5min cron cadence (was 1h = 55min buffer)
 
 async function seedCryptoSectors() {
   const allIds = [...new Set(SECTORS_LIST.flatMap((s) => s.tokens))];
