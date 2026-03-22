@@ -307,6 +307,42 @@ describe('installSwUpdateHandler', () => {
     assert.equal(env.reloadCalls.length, 1, 'no second reload on visible transition');
   });
 
+  // --- background-loop prevention (infinite reload bug fix) -------------------
+
+  it('does NOT auto-reload when update fires while tab is already hidden', () => {
+    env.swContainer._controller = {};
+    install(env);
+
+    // Tab is in the background when the SW update activates
+    env.doc.setVisibilityState('hidden');
+    env.swContainer.fireControllerChange();
+
+    // visibilitychange fires but tab is still hidden — must NOT reload (prevents infinite loop)
+    fireVisibility(env);
+    assert.equal(env.reloadCalls.length, 0, 'no auto-reload when already in background');
+  });
+
+  it('allows auto-reload after user returns to the tab that received a background update', () => {
+    env.swContainer._controller = {};
+    install(env);
+
+    // Update fires while hidden
+    env.doc.setVisibilityState('hidden');
+    env.swContainer.fireControllerChange();
+    fireVisibility(env);
+    assert.equal(env.reloadCalls.length, 0, 'no reload yet — tab still hidden');
+
+    // User returns to the tab — now they can see the toast
+    env.doc.setVisibilityState('visible');
+    fireVisibility(env);
+    assert.equal(env.reloadCalls.length, 0, 'no reload on becoming visible');
+
+    // User switches away — auto-reload is now allowed
+    env.doc.setVisibilityState('hidden');
+    fireVisibility(env);
+    assert.equal(env.reloadCalls.length, 1, 'reload fires when user switches away after seeing toast');
+  });
+
   // --- listener leak regression -----------------------------------------------
 
   it('removes the previous visibilitychange handler when a newer deploy replaces the toast', () => {

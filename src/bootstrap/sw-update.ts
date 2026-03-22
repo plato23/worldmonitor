@@ -25,8 +25,13 @@ export interface SwUpdateHandlerOptions {
  *
  * On each controllerchange after the first (first = initial claim on a new session),
  * shows a dismissible "Update Available" toast. If the user dismisses the toast,
- * the tab auto-reloads the next time it goes to background. Dismissing one version
- * never suppresses toasts for future deploys.
+ * the tab auto-reloads the next time it goes to background — but only after the tab
+ * has been visible at least once since the toast appeared. This prevents an infinite
+ * reload loop when an update is detected while the tab is already in the background:
+ * without this guard, onHidden would fire immediately, reload the hidden page, the
+ * new page would detect the same update, fire again, and loop forever.
+ *
+ * Dismissing one version never suppresses toasts for future deploys.
  */
 export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): void {
   const swContainer = options.swContainer ?? navigator.serviceWorker;
@@ -61,9 +66,19 @@ export function installSwUpdateHandler(options: SwUpdateHandlerOptions = {}): vo
     `;
 
     let dismissed = false;
+    // Auto-reload on tab-hide is only allowed after the tab has been visible at least
+    // once since the toast appeared. If the update fires while the tab is already hidden,
+    // this starts false and becomes true when the user returns — preventing the immediate
+    // onHidden → reload → new page → onHidden → reload infinite background loop.
+    let autoReloadAllowed = doc.visibilityState === 'visible';
 
     const onHidden = (): void => {
-      if (!dismissed && doc.visibilityState === 'hidden' && doc.body.contains(toast)) {
+      if (doc.visibilityState === 'visible') {
+        // Tab returned to foreground — user has now seen the toast, allow auto-reload.
+        autoReloadAllowed = true;
+        return;
+      }
+      if (!dismissed && autoReloadAllowed && doc.body.contains(toast)) {
         reload();
       }
     };
