@@ -362,22 +362,45 @@ export async function buildRetailerSpreadSnapshot(
     currency_code: string;
     freshness_min: string | null;
   }>(
-    `SELECT r.slug AS retailer_slug, r.name AS retailer_name, r.currency_code,
-            SUM(po.price) AS basket_total, COUNT(*) AS item_count,
-            EXTRACT(EPOCH FROM (NOW() - MAX(po.observed_at))) / 60 AS freshness_min
-     FROM baskets b
-     JOIN basket_items bi ON bi.basket_id = b.id AND bi.active = true
-     JOIN product_matches pm ON pm.basket_item_id = bi.id AND pm.match_status IN ('auto','approved')
-     JOIN retailer_products rp ON rp.id = pm.retailer_product_id AND rp.active = true
-     JOIN retailers r ON r.id = rp.retailer_id AND r.market_code = $2 AND r.active = true
-     JOIN LATERAL (
-       SELECT price, observed_at
-       FROM price_observations
-       WHERE retailer_product_id = rp.id AND in_stock = true
-       ORDER BY observed_at DESC LIMIT 1
-     ) po ON true
-     WHERE b.slug = $1
-     GROUP BY r.slug, r.name, r.currency_code
+    `WITH retailer_item_best AS (
+       -- For each (retailer, basket_item), pick the cheapest in-stock latest price.
+       -- This deduplicates multiple matched SKUs per basket item per retailer.
+       SELECT r.id AS retailer_id, r.slug AS retailer_slug, r.name AS retailer_name,
+              r.currency_code, bi.id AS basket_item_id,
+              MIN(po.price) AS best_price,
+              MAX(po.observed_at) AS last_observed_at
+       FROM baskets b
+       JOIN basket_items bi ON bi.basket_id = b.id AND bi.active = true
+       JOIN product_matches pm ON pm.basket_item_id = bi.id AND pm.match_status IN ('auto','approved')
+       JOIN retailer_products rp ON rp.id = pm.retailer_product_id AND rp.active = true
+       JOIN retailers r ON r.id = rp.retailer_id AND r.market_code = $2 AND r.active = true
+       JOIN LATERAL (
+         SELECT price, observed_at
+         FROM price_observations
+         WHERE retailer_product_id = rp.id AND in_stock = true
+         ORDER BY observed_at DESC LIMIT 1
+       ) po ON true
+       WHERE b.slug = $1
+       GROUP BY r.id, r.slug, r.name, r.currency_code, bi.id
+     ),
+     retailer_ids AS (
+       SELECT DISTINCT retailer_id FROM retailer_item_best
+     ),
+     -- Only include basket items that every active retailer covers.
+     -- Comparing totals across different item counts is invalid.
+     common_items AS (
+       SELECT basket_item_id
+       FROM retailer_item_best
+       GROUP BY basket_item_id
+       HAVING COUNT(DISTINCT retailer_id) = (SELECT COUNT(*) FROM retailer_ids)
+     )
+     SELECT rib.retailer_slug, rib.retailer_name, rib.currency_code,
+            SUM(rib.best_price) AS basket_total,
+            COUNT(*) AS item_count,
+            EXTRACT(EPOCH FROM (NOW() - MAX(rib.last_observed_at))) / 60 AS freshness_min
+     FROM retailer_item_best rib
+     JOIN common_items ci ON ci.basket_item_id = rib.basket_item_id
+     GROUP BY rib.retailer_slug, rib.retailer_name, rib.currency_code
      ORDER BY basket_total ASC`,
     [basketSlug, marketCode],
   );

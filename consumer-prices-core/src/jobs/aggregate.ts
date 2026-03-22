@@ -195,14 +195,29 @@ export async function aggregateBasket(basketSlug: string, marketCode: string) {
   await writeComputedIndex(basketId, null, null, 'coverage_pct', coveragePct);
 
   // Retailer spread: (most expensive basket - cheapest basket) / cheapest × 100
-  const retailerTotals = new Map<string, number>();
+  // Only compare retailers on the INTERSECTION of basket items they all carry.
+  // Also deduplicate: per (retailer, basketItem) take cheapest price to avoid
+  // inflating totals when multiple SKUs are matched to the same basket item.
+  const byRetailerItem = new Map<string, Map<string, number>>();
   for (const r of rows) {
-    retailerTotals.set(r.retailerSlug, (retailerTotals.get(r.retailerSlug) ?? 0) + r.price);
+    if (!byRetailerItem.has(r.retailerSlug)) byRetailerItem.set(r.retailerSlug, new Map());
+    const itemMap = byRetailerItem.get(r.retailerSlug)!;
+    const existing = itemMap.get(r.basketItemId);
+    if (existing === undefined || r.price < existing) itemMap.set(r.basketItemId, r.price);
   }
-  if (retailerTotals.size >= 2) {
-    const totals = [...retailerTotals.values()];
-    const spreadPct = ((Math.max(...totals) - Math.min(...totals)) / Math.min(...totals)) * 100;
-    await writeComputedIndex(basketId, null, null, 'retailer_spread_pct', Math.round(spreadPct * 10) / 10);
+  const retailerSlugs = [...byRetailerItem.keys()];
+  if (retailerSlugs.length >= 2) {
+    // Find basket items covered by every retailer
+    const commonItemIds = [...byRetailerItem.get(retailerSlugs[0])!.keys()].filter((itemId) =>
+      retailerSlugs.every((slug) => byRetailerItem.get(slug)!.has(itemId)),
+    );
+    if (commonItemIds.length > 0) {
+      const retailerTotals = retailerSlugs.map((slug) =>
+        commonItemIds.reduce((sum, id) => sum + byRetailerItem.get(slug)!.get(id)!, 0),
+      );
+      const spreadPct = ((Math.max(...retailerTotals) - Math.min(...retailerTotals)) / Math.min(...retailerTotals)) * 100;
+      await writeComputedIndex(basketId, null, null, 'retailer_spread_pct', Math.round(spreadPct * 10) / 10);
+    }
   }
 
   // Per-category indices for buildTopCategories snapshot

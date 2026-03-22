@@ -170,10 +170,19 @@ export class ExaSearchAdapter implements RetailerAdapter {
     const payload = JSON.parse(result.html) as SearchPayload;
     const currency = ctx.config.currencyCode;
 
+    if (payload.exaResults.length === 0) {
+      ctx.logger.warn(`  [exa] ${payload.canonicalName}: 0 results from Exa (no indexed pages on this domain for query)`);
+      return [];
+    }
+
     for (const r of payload.exaResults) {
       const price =
         matchPrice(r.summary ?? '', currency) ??
         matchPrice(r.title ?? '', currency);
+
+      if (price === null) {
+        ctx.logger.warn(`  [exa] ${payload.canonicalName}: no price in result — title="${r.title?.slice(0, 60)}" summary="${(r.summary ?? '').slice(0, 80)}"`);
+      }
 
       if (price !== null) {
         return [
