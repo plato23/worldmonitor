@@ -151,11 +151,12 @@ const SEED_META = {
   thermalEscalation:   { key: 'seed-meta:thermal:escalation',                 maxStaleMin: 240 },
   nationalDebt:        { key: 'seed-meta:economic:national-debt',              maxStaleMin: 10080 }, // 7 days — monthly seed
   tariffTrendsUs:      { key: 'seed-meta:trade:tariffs:v1:840:all:10',        maxStaleMin: 900 },
-  consumerPricesOverview:   { key: 'seed-meta:consumer-prices:overview:ae',     maxStaleMin: 90 }, // seed TTL=30min; 3× interval
-  consumerPricesCategories: { key: 'seed-meta:consumer-prices:categories:ae:30d',            maxStaleMin: 90 },
-  consumerPricesMovers:     { key: 'seed-meta:consumer-prices:movers:ae:30d',               maxStaleMin: 90 },
-  consumerPricesSpread:     { key: 'seed-meta:consumer-prices:retailer-spread:ae:essentials-ae', maxStaleMin: 120 }, // TTL=60min; 2× interval
-  consumerPricesFreshness:  { key: 'seed-meta:consumer-prices:freshness:ae',    maxStaleMin: 90 }, // publish.ts runs independently; align with other consumer-prices keys
+  // publish.ts runs once daily (02:30 UTC); seed-meta TTL=52h — maxStaleMin must cover the full 24h cycle
+  consumerPricesOverview:   { key: 'seed-meta:consumer-prices:overview:ae',     maxStaleMin: 1500 }, // 25h = 24h cadence + 1h grace
+  consumerPricesCategories: { key: 'seed-meta:consumer-prices:categories:ae:30d',            maxStaleMin: 1500 },
+  consumerPricesMovers:     { key: 'seed-meta:consumer-prices:movers:ae:30d',               maxStaleMin: 1500 },
+  consumerPricesSpread:     { key: 'seed-meta:consumer-prices:retailer-spread:ae:essentials-ae', maxStaleMin: 1500 },
+  consumerPricesFreshness:  { key: 'seed-meta:consumer-prices:freshness:ae',    maxStaleMin: 1500 },
   // defiTokens/aiTokens/otherTokens all share one seed run (seed-token-panels cron, every 30min)
   defiTokens:        { key: 'seed-meta:market:token-panels', maxStaleMin: 90 },
   aiTokens:          { key: 'seed-meta:market:token-panels', maxStaleMin: 90 },
