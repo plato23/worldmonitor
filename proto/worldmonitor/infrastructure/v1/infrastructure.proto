@@ -98,6 +98,24 @@ message TrafficAnomaly {
   string location_code = 8;
   // Country display name.
   string location_name = 9;
+  // Latitude of the affected location.
+  float latitude = 10;
+  // Longitude of the affected location.
+  float longitude = 11;
+}
+
+// DdosLocationHit represents a top DDoS target location with geo coordinates.
+message DdosLocationHit {
+  // ISO 3166-1 alpha-2 country code.
+  string country_code = 1;
+  // Country display name.
+  string country_name = 2;
+  // Percentage share of total DDoS traffic targeting this location (0-100).
+  float percentage = 3;
+  // Latitude of the target location.
+  float latitude = 4;
+  // Longitude of the target location.
+  float longitude = 5;
 }
 
 // ServiceOperationalStatus represents the current status of a service.

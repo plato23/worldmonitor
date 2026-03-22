@@ -44,6 +44,7 @@ import type { SatellitePosition } from '@/services/satellites';
 import type { IranEvent } from '@/services/conflict';
 import type { ImageryScene } from '@/generated/server/worldmonitor/imagery/v1/service_server';
 import type { WebcamEntry, WebcamCluster } from '@/generated/client/worldmonitor/webcam/v1/service_client';
+import type { TrafficAnomaly as ProtoTrafficAnomaly, DdosLocationHit } from '@/generated/client/worldmonitor/infrastructure/v1/service_client';
 
 export type TimeRange = '1h' | '6h' | '24h' | '48h' | '7d' | 'all';
 export type MapView = 'global' | 'america' | 'mena' | 'eu' | 'asia' | 'latam' | 'africa' | 'oceania';
@@ -427,6 +428,16 @@ export class MapContainer {
     this.cachedOutages = outages;
     if (this.useGlobe) { this.globeMap?.setOutages(outages); return; }
     if (this.useDeckGL) { this.deckGLMap?.setOutages(outages); } else { this.svgMap?.setOutages(outages); }
+  }
+
+  public setTrafficAnomalies(anomalies: ProtoTrafficAnomaly[]): void {
+    if (this.useGlobe) { this.globeMap?.setTrafficAnomalies(anomalies); return; }
+    if (this.useDeckGL) { this.deckGLMap?.setTrafficAnomalies(anomalies); }
+  }
+
+  public setDdosLocations(hits: DdosLocationHit[]): void {
+    if (this.useGlobe) { this.globeMap?.setDdosLocations(hits); return; }
+    if (this.useDeckGL) { this.deckGLMap?.setDdosLocations(hits); }
   }
 
   public setAisData(disruptions: AisDisruptionEvent[], density: AisDensityZone[]): void {

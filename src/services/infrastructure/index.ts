@@ -31,7 +31,7 @@ const trafficAnomaliesBreaker = createCircuitBreaker<ListInternetTrafficAnomalie
 
 const emptyOutageFallback: ListInternetOutagesResponse = { outages: [], pagination: undefined };
 const emptyStatusFallback: ListServiceStatusesResponse = { statuses: [] };
-const emptyDdosFallback: ListInternetDdosAttacksResponse = { protocol: [], vector: [], dateRangeStart: '', dateRangeEnd: '' };
+const emptyDdosFallback: ListInternetDdosAttacksResponse = { protocol: [], vector: [], dateRangeStart: '', dateRangeEnd: '', topTargetLocations: [] };
 const emptyAnomaliesFallback: ListInternetTrafficAnomaliesResponse = { anomalies: [], totalCount: 0 };
 
 // ---- Proto enum -> legacy string adapters ----

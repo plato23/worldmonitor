@@ -894,6 +894,10 @@ components:
                 dateRangeEnd:
                     type: string
                     description: ISO 8601 end of the data window.
+                topTargetLocations:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/DdosLocationHit'
             description: ListInternetDdosAttacksResponse contains DDoS attack protocol and vector breakdowns.
         DdosAttackSummaryEntry:
             type: object
@@ -906,6 +910,28 @@ components:
                     format: float
                     description: Percentage share of total DDoS traffic (0–100).
             description: DdosAttackSummaryEntry represents a single protocol or vector and its share of DDoS traffic.
+        DdosLocationHit:
+            type: object
+            properties:
+                countryCode:
+                    type: string
+                    description: ISO 3166-1 alpha-2 country code.
+                countryName:
+                    type: string
+                    description: Country display name.
+                percentage:
+                    type: number
+                    format: float
+                    description: Percentage share of total DDoS traffic targeting this location (0-100).
+                latitude:
+                    type: number
+                    format: float
+                    description: Latitude of the target location.
+                longitude:
+                    type: number
+                    format: float
+                    description: Longitude of the target location.
+            description: DdosLocationHit represents a top DDoS target location with geo coordinates.
         ListInternetTrafficAnomaliesRequest:
             type: object
             properties:
@@ -957,4 +983,12 @@ components:
                 locationName:
                     type: string
                     description: Country display name.
+                latitude:
+                    type: number
+                    format: float
+                    description: Latitude of the affected location.
+                longitude:
+                    type: number
+                    format: float
+                    description: Longitude of the affected location.
             description: TrafficAnomaly represents an anomalous traffic pattern detected by Cloudflare Radar.

@@ -24,8 +24,9 @@ export async function listInternetDdosAttacks(
       vector: data?.vector || [],
       dateRangeStart: data?.dateRangeStart || '',
       dateRangeEnd: data?.dateRangeEnd || '',
+      topTargetLocations: data?.topTargetLocations || [],
     };
   } catch {
-    return { protocol: [], vector: [], dateRangeStart: '', dateRangeEnd: '' };
+    return { protocol: [], vector: [], dateRangeStart: '', dateRangeEnd: '', topTargetLocations: [] };
   }
 }

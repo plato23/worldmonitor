@@ -29,6 +29,8 @@ import {
   fetchWeatherAlerts,
   fetchFredData,
   fetchInternetOutages,
+  fetchTrafficAnomalies,
+  fetchDdosAttacks,
   isOutagesConfigured,
   fetchAisSignals,
   getAisStatus,
@@ -1580,6 +1582,12 @@ export class DataLoaderManager implements AppModule {
           this.ctx.map?.setLayerReady('outages', outages.length > 0);
           this.ctx.statusPanel?.updateFeed('NetBlocks', { status: 'ok', itemCount: outages.length });
         }
+        fetchTrafficAnomalies().then(r => {
+          this.ctx.map?.setTrafficAnomalies(r.anomalies);
+        }).catch(() => {});
+        fetchDdosAttacks().then(r => {
+          this.ctx.map?.setDdosLocations(r.topTargetLocations ?? []);
+        }).catch(() => {});
       } catch (error) {
         console.error('[Intelligence] Outages fetch failed:', error);
         dataFreshness.recordError('outages', String(error));
@@ -1887,6 +1895,12 @@ export class DataLoaderManager implements AppModule {
       signalAggregator.ingestOutages(outages);
       this.ctx.statusPanel?.updateFeed('NetBlocks', { status: 'ok', itemCount: outages.length });
       dataFreshness.recordUpdate('outages', outages.length);
+      fetchTrafficAnomalies().then(r => {
+        this.ctx.map?.setTrafficAnomalies(r.anomalies);
+      }).catch(() => {});
+      fetchDdosAttacks().then(r => {
+        this.ctx.map?.setDdosLocations(r.topTargetLocations ?? []);
+      }).catch(() => {});
     } catch (error) {
       this.ctx.map?.setLayerReady('outages', false);
       this.ctx.statusPanel?.updateFeed('NetBlocks', { status: 'error' });

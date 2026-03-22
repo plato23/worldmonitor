@@ -18,4 +18,6 @@ message ListInternetDdosAttacksResponse {
   string date_range_start = 3;
   // ISO 8601 end of the data window.
   string date_range_end = 4;
+  // Top DDoS target locations with geo coordinates.
+  repeated DdosLocationHit top_target_locations = 5;
 }

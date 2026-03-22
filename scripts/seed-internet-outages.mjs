@@ -131,9 +131,10 @@ async function fetchDdosData(token) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  const [protocolResp, vectorResp] = await Promise.all([
+  const [protocolResp, vectorResp, targetResp] = await Promise.all([
     fetch(`${CF_RADAR_BASE}/radar/attacks/layer3/summary/protocol?dateRange=7d`, { headers, signal: AbortSignal.timeout(15_000) }),
     fetch(`${CF_RADAR_BASE}/radar/attacks/layer3/summary/vector?dateRange=7d`, { headers, signal: AbortSignal.timeout(15_000) }),
+    fetch(`${CF_RADAR_BASE}/radar/attacks/layer3/top/locations/target?dateRange=7d`, { headers, signal: AbortSignal.timeout(15_000) }),
   ]);
 
   if (!protocolResp.ok || !vectorResp.ok) {
@@ -141,11 +142,24 @@ async function fetchDdosData(token) {
   }
 
   const [protocolData, vectorData] = await Promise.all([protocolResp.json(), vectorResp.json()]);
+  const targetData = targetResp.ok ? await targetResp.json() : null;
 
   function toEntries(summary) {
     return Object.entries(summary || {}).map(([label, pct]) => ({ label, percentage: parseFloat(pct) || 0 }))
       .sort((a, b) => b.percentage - a.percentage);
   }
+
+  const topTargetLocations = (targetData?.result?.top_0 || []).map((item) => {
+    const code = item.clientCountryAlpha2 || '';
+    const coords = COUNTRY_COORDS[code] || null;
+    return {
+      countryCode: code,
+      countryName: '',
+      percentage: parseFloat(item.value) || 0,
+      latitude: coords ? coords[0] : 0,
+      longitude: coords ? coords[1] : 0,
+    };
+  }).filter((item) => item.latitude !== 0 || item.longitude !== 0);
 
   const meta = protocolData.result?.meta;
   return {
@@ -153,6 +167,7 @@ async function fetchDdosData(token) {
     vector: toEntries(vectorData.result?.summary_0),
     dateRangeStart: meta?.dateRange?.[0]?.startTime || '',
     dateRangeEnd: meta?.dateRange?.[0]?.endTime || '',
+    topTargetLocations,
   };
 }
 
@@ -177,17 +192,22 @@ async function fetchTrafficAnomalies(token) {
   const data = await resp.json();
   const raw = data.result?.trafficAnomalies || [];
 
-  const anomalies = raw.map((item) => ({
-    uuid: item.uuid || '',
-    type: item.type || '',
-    status: item.status || '',
-    startDate: toEpochMsFromIso(item.startDate),
-    endDate: toEpochMsFromIso(item.endDate),
-    asn: item.asnDetails?.asn ? String(item.asnDetails.asn) : '',
-    asnName: item.asnDetails?.name || '',
-    locationCode: item.locationDetails?.code || '',
-    locationName: item.locationDetails?.name || '',
-  }));
+  const anomalies = raw.map((item) => {
+    const coords = COUNTRY_COORDS[item.locationDetails?.code] || null;
+    return {
+      uuid: item.uuid || '',
+      type: item.type || '',
+      status: item.status || '',
+      startDate: toEpochMsFromIso(item.startDate),
+      endDate: toEpochMsFromIso(item.endDate),
+      asn: item.asnDetails?.asn ? String(item.asnDetails.asn) : '',
+      asnName: item.asnDetails?.name || '',
+      locationCode: item.locationDetails?.code || '',
+      locationName: item.locationDetails?.name || '',
+      latitude: coords ? coords[0] : 0,
+      longitude: coords ? coords[1] : 0,
+    };
+  });
 
   return { anomalies, totalCount: anomalies.length };
 }

@@ -43,6 +43,7 @@ import { type IranEvent, getIranEventColor, getIranEventRadius } from '@/service
 import type { GpsJamHex } from '@/services/gps-interference';
 import { fetchImageryScenes } from '@/services/imagery';
 import type { ImageryScene } from '@/generated/server/worldmonitor/imagery/v1/service_server';
+import type { TrafficAnomaly as ProtoTrafficAnomaly, DdosLocationHit } from '@/generated/client/worldmonitor/infrastructure/v1/service_client';
 import type { DisplacementFlow } from '@/services/displacement';
 import type { Earthquake } from '@/services/earthquakes';
 import type { ClimateAnomaly } from '@/services/climate';
@@ -216,6 +217,8 @@ function getOverlayColors() {
     vesselMilitary: [255, 100, 100, 220] as [number, number, number, number],
     protest: [255, 150, 0, 200] as [number, number, number, number],
     outage: [255, 50, 50, 180] as [number, number, number, number],
+    trafficAnomaly: [255, 160, 0, 200] as [number, number, number, number],
+    ddosHit: [180, 0, 255, 200] as [number, number, number, number],
     weather: [100, 150, 255, 180] as [number, number, number, number],
     startupHub: isLight
       ? [22, 163, 74, 220] as [number, number, number, number]
@@ -335,6 +338,8 @@ export class DeckGLMap {
   private earthquakes: Earthquake[] = [];
   private weatherAlerts: WeatherAlert[] = [];
   private outages: InternetOutage[] = [];
+  private trafficAnomalies: ProtoTrafficAnomaly[] = [];
+  private ddosLocations: DdosLocationHit[] = [];
   private cyberThreats: CyberThreat[] = [];
   private aptGroups: import('@/types').APTGroup[] = [];
   private aptGroupsLoaded = false;
@@ -1464,6 +1469,16 @@ export class DeckGLMap {
     }
     layers.push(this.createEmptyGhost('outages-layer'));
 
+    if (mapLayers.outages && this.trafficAnomalies.length > 0) {
+      layers.push(this.createTrafficAnomaliesLayer(this.trafficAnomalies));
+    }
+    layers.push(this.createEmptyGhost('traffic-anomalies-layer'));
+
+    if (mapLayers.outages && this.ddosLocations.length > 0) {
+      layers.push(this.createDdosLocationsLayer(this.ddosLocations));
+    }
+    layers.push(this.createEmptyGhost('ddos-locations-layer'));
+
     // Cyber threat IOC layer
     if (mapLayers.cyberThreats && this.cyberThreats.length > 0) {
       layers.push(this.createCyberThreatsLayer());
@@ -2294,6 +2309,32 @@ export class DeckGLMap {
       getFillColor: COLORS.outage,
       radiusMinPixels: 6,
       radiusMaxPixels: 18,
+      pickable: true,
+    });
+  }
+
+  private createTrafficAnomaliesLayer(anomalies: ProtoTrafficAnomaly[]): ScatterplotLayer {
+    return new ScatterplotLayer({
+      id: 'traffic-anomalies-layer',
+      data: anomalies.filter(a => a.latitude !== 0 || a.longitude !== 0),
+      getPosition: (d) => [d.longitude, d.latitude],
+      getRadius: 30000,
+      getFillColor: COLORS.trafficAnomaly,
+      radiusMinPixels: 5,
+      radiusMaxPixels: 14,
+      pickable: true,
+    });
+  }
+
+  private createDdosLocationsLayer(hits: DdosLocationHit[]): ScatterplotLayer {
+    return new ScatterplotLayer({
+      id: 'ddos-locations-layer',
+      data: hits.filter(h => h.latitude !== 0 || h.longitude !== 0),
+      getPosition: (d) => [d.longitude, d.latitude],
+      getRadius: (d) => 20000 + (d.percentage || 0) * 800,
+      getFillColor: COLORS.ddosHit,
+      radiusMinPixels: 5,
+      radiusMaxPixels: 16,
       pickable: true,
     });
   }
@@ -3618,6 +3659,10 @@ export class DeckGLMap {
       }
       case 'outages-layer':
         return { html: `<div class="deckgl-tooltip"><strong>${text(obj.asn || t('components.deckgl.tooltip.internetOutage'))}</strong><br/>${text(obj.country)}</div>` };
+      case 'traffic-anomalies-layer':
+        return { html: `<div class="deckgl-tooltip"><strong>${text(obj.type || 'Traffic Anomaly')}</strong><br/>${text(obj.locationName || obj.asnName || '')}</div>` };
+      case 'ddos-locations-layer':
+        return { html: `<div class="deckgl-tooltip"><strong>DDoS: ${text(obj.countryName)}</strong><br/>${text(obj.percentage ? obj.percentage.toFixed(1) + '%' : '')}</div>` };
       case 'cyber-threats-layer':
         return { html: `<div class="deckgl-tooltip"><strong>${t('popups.cyberThreat.title')}</strong><br/>${text(obj.severity || t('components.deckgl.tooltip.medium'))} · ${text(obj.country || t('popups.unknown'))}</div>` };
       case 'iran-events-layer':
@@ -3888,6 +3933,8 @@ export class DeckGLMap {
       'earthquakes-layer': 'earthquake',
       'weather-layer': 'weather',
       'outages-layer': 'outage',
+      'traffic-anomalies-layer': 'outage',
+      'ddos-locations-layer': 'outage',
       'cyber-threats-layer': 'cyberThreat',
       'iran-events-layer': 'iranEvent',
       'protests-layer': 'protest',
@@ -4827,6 +4874,16 @@ export class DeckGLMap {
 
   public setOutages(outages: InternetOutage[]): void {
     this.outages = outages;
+    this.render();
+  }
+
+  public setTrafficAnomalies(anomalies: ProtoTrafficAnomaly[]): void {
+    this.trafficAnomalies = anomalies;
+    this.render();
+  }
+
+  public setDdosLocations(hits: DdosLocationHit[]): void {
+    this.ddosLocations = hits;
     this.render();
   }
 

@@ -134,6 +134,18 @@ interface OutageMarker extends BaseMarker {
   severity: string;
   country: string;
 }
+interface TrafficAnomalyMarker extends BaseMarker {
+  _kind: 'trafficAnomaly';
+  id: string;
+  type: string;
+  locationName: string;
+}
+interface DdosHitMarker extends BaseMarker {
+  _kind: 'ddosHit';
+  id: string;
+  countryName: string;
+  percentage: number;
+}
 interface CyberMarker extends BaseMarker {
   _kind: 'cyber';
   id: string;
@@ -398,7 +410,7 @@ interface GlobePolygon {
 }
 type GlobeMarker =
   | ConflictMarker | HotspotMarker | FlightMarker | VesselMarker | ClusterMarker
-  | WeatherMarker | NaturalMarker | IranMarker | OutageMarker
+  | WeatherMarker | NaturalMarker | IranMarker | OutageMarker | TrafficAnomalyMarker | DdosHitMarker
   | CyberMarker | FireMarker | ProtestMarker
   | UcdpMarker | DisplacementMarker | ClimateMarker | GpsJamMarker | TechMarker
   | ConflictZoneMarker | MilBaseMarker | NuclearSiteMarker | IrradiatorSiteMarker | SpaceportSiteMarker
@@ -464,6 +476,8 @@ export class GlobeMap {
   private naturalMarkers: NaturalMarker[] = [];
   private iranMarkers: IranMarker[] = [];
   private outageMarkers: OutageMarker[] = [];
+  private trafficAnomalyMarkers: TrafficAnomalyMarker[] = [];
+  private ddosMarkers: DdosHitMarker[] = [];
   private cyberMarkers: CyberMarker[] = [];
   private fireMarkers: FireMarker[] = [];
   private protestMarkers: ProtestMarker[] = [];
@@ -1027,6 +1041,12 @@ export class GlobeMap {
       const sc = d.severity === 'total' ? '#ff2020' : d.severity === 'major' ? '#ff8800' : '#ffcc00';
       el.innerHTML = GlobeMap.wrapHit(`<div style="font-size:12px;color:${sc};text-shadow:0 0 4px ${sc}88;">📡</div>`);
       el.title = `${d.country}: ${d.title}`;
+    } else if (d._kind === 'trafficAnomaly') {
+      el.innerHTML = GlobeMap.wrapHit(`<div style="font-size:10px;color:#ffa000;text-shadow:0 0 4px #ffa00088;font-weight:bold;">⚡</div>`);
+      el.title = `${d.type || 'Traffic Anomaly'}: ${d.locationName}`;
+    } else if (d._kind === 'ddosHit') {
+      el.innerHTML = GlobeMap.wrapHit(`<div style="font-size:10px;color:#b400ff;text-shadow:0 0 4px #b400ff88;font-weight:bold;">⚔</div>`);
+      el.title = `DDoS: ${d.countryName} (${d.percentage.toFixed(1)}%)`;
     } else if (d._kind === 'cyber') {
       const sc = d.severity === 'critical' ? '#ff0044' : d.severity === 'high' ? '#ff4400' : d.severity === 'medium' ? '#ffaa00' : '#44aaff';
       el.innerHTML = GlobeMap.wrapHit(`<div style="font-size:10px;color:${sc};text-shadow:0 0 4px ${sc}88;font-weight:bold;">🛡</div>`);
@@ -1386,6 +1406,12 @@ export class GlobeMap {
       html = `<span style="color:${sc};font-weight:bold;">📡 ${d.severity.toUpperCase()} Outage</span>` +
              `<br><span style="opacity:.7;">${esc(d.country)}</span>` +
              `<br><span style="opacity:.7;white-space:normal;display:block;">${esc(d.title.slice(0, 70))}</span>`;
+    } else if (d._kind === 'trafficAnomaly') {
+      html = `<span style="color:#ffa000;font-weight:bold;">⚡ ${esc(d.type || 'Traffic Anomaly')}</span>` +
+             `<br><span style="opacity:.7;">${esc(d.locationName)}</span>`;
+    } else if (d._kind === 'ddosHit') {
+      html = `<span style="color:#b400ff;font-weight:bold;">⚔ DDoS Target: ${esc(d.countryName)}</span>` +
+             `<br><span style="opacity:.7;">${d.percentage.toFixed(1)}% of attack traffic</span>`;
     } else if (d._kind === 'cyber') {
       const sc = d.severity === 'critical' ? '#ff0044' : d.severity === 'high' ? '#ff4400' : '#ffaa00';
       html = `<span style="color:${sc};font-weight:bold;">🛡 ${d.severity.toUpperCase()}</span>` +
@@ -1931,7 +1957,11 @@ export class GlobeMap {
     }
     if (this.layers.ais) markers.push(...this.aisMarkers);
     if (this.layers.iranAttacks) markers.push(...this.iranMarkers);
-    if (this.layers.outages) markers.push(...this.outageMarkers);
+    if (this.layers.outages) {
+      markers.push(...this.outageMarkers);
+      markers.push(...this.trafficAnomalyMarkers);
+      markers.push(...this.ddosMarkers);
+    }
     if (this.layers.cyberThreats) markers.push(...this.cyberMarkers);
     if (this.layers.fires) markers.push(...this.fireMarkers);
     if (this.layers.protests) markers.push(...this.protestMarkers);
@@ -2826,6 +2856,35 @@ export class GlobeMap {
     }));
     this.flushMarkers();
   }
+
+  public setTrafficAnomalies(anomalies: import('@/generated/client/worldmonitor/infrastructure/v1/service_client').TrafficAnomaly[]): void {
+    this.trafficAnomalyMarkers = (anomalies ?? [])
+      .filter(a => a.latitude !== 0 || a.longitude !== 0)
+      .map(a => ({
+        _kind: 'trafficAnomaly' as const,
+        _lat: a.latitude,
+        _lng: a.longitude,
+        id: a.uuid || `ta-${a.locationCode}-${a.startDate}`,
+        type: a.type || '',
+        locationName: a.locationName || '',
+      }));
+    this.flushMarkers();
+  }
+
+  public setDdosLocations(hits: import('@/generated/client/worldmonitor/infrastructure/v1/service_client').DdosLocationHit[]): void {
+    this.ddosMarkers = (hits ?? [])
+      .filter(h => h.latitude !== 0 || h.longitude !== 0)
+      .map(h => ({
+        _kind: 'ddosHit' as const,
+        _lat: h.latitude,
+        _lng: h.longitude,
+        id: `ddos-${h.countryCode}`,
+        countryName: h.countryName || '',
+        percentage: h.percentage || 0,
+      }));
+    this.flushMarkers();
+  }
+
   public setAisData(disruptions: AisDisruptionEvent[], _density: AisDensityZone[]): void {
     // AisDensityZone requires a heatmap layer — render disruption events only
     this.aisMarkers = (disruptions ?? [])

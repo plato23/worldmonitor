@@ -182,11 +182,20 @@ export interface ListInternetDdosAttacksResponse {
   vector: DdosAttackSummaryEntry[];
   dateRangeStart: string;
   dateRangeEnd: string;
+  topTargetLocations: DdosLocationHit[];
 }
 
 export interface DdosAttackSummaryEntry {
   label: string;
   percentage: number;
+}
+
+export interface DdosLocationHit {
+  countryCode: string;
+  countryName: string;
+  percentage: number;
+  latitude: number;
+  longitude: number;
 }
 
 export interface ListInternetTrafficAnomaliesRequest {
@@ -208,6 +217,8 @@ export interface TrafficAnomaly {
   asnName: string;
   locationCode: string;
   locationName: string;
+  latitude: number;
+  longitude: number;
 }
 
 export type CableHealthStatus = "CABLE_HEALTH_STATUS_UNSPECIFIED" | "CABLE_HEALTH_STATUS_OK" | "CABLE_HEALTH_STATUS_DEGRADED" | "CABLE_HEALTH_STATUS_FAULT";
