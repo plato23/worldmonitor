@@ -1126,7 +1126,7 @@ function deriveStateDrivenForecasts({
   }
 
   return derived
-    .sort((a, b) => (Number(b.stateDerivedBackfill) - Number(a.stateDerivedBackfill))
+    .sort((a, b) => (Number(a.stateDerivedBackfill) - Number(b.stateDerivedBackfill))
       || (b.probability * b.confidence) - (a.probability * a.confidence)
       || a.title.localeCompare(b.title));
 }

@@ -724,6 +724,112 @@ describe('state-driven domain derivation', () => {
     assert.ok(derived.some((pred) => pred.title.includes('Energy repricing risk')));
     assert.ok(derived.some((pred) => pred.title.includes('Supply chain disruption risk')));
   });
+
+  it('uses a state-derived backfill only when scores miss the main threshold but clear the fallback floor', () => {
+    const base = makePrediction('conflict', 'Red Sea', 'Escalation risk: constrained maritime pressure', 0.5, 0.45, '7d', [
+      { type: 'energy_supply_shock', value: 'Energy flows remain exposed to Red Sea disruption', weight: 0.24 },
+    ]);
+    base.stateContext = {
+      id: 'state-red-sea-fallback',
+      label: 'Red Sea constrained disruption state',
+      dominantRegion: 'Red Sea',
+      dominantDomain: 'conflict',
+      domains: ['conflict', 'infrastructure'],
+      topSignals: [{ type: 'energy_supply_shock' }],
+    };
+
+    const legacySupplyChain = makePrediction('supply_chain', 'Red Sea', 'Supply chain disruption: Red Sea corridor', 0.41, 0.39, '7d', [
+      { type: 'shipping_cost_shock', value: 'Shipping costs remain elevated around the corridor', weight: 0.22 },
+    ]);
+    legacySupplyChain.stateContext = {
+      id: 'state-red-sea-fallback',
+      label: 'Red Sea constrained disruption state',
+      dominantRegion: 'Red Sea',
+      dominantDomain: 'supply_chain',
+      domains: ['supply_chain'],
+      topSignals: [{ type: 'shipping_cost_shock' }],
+    };
+
+    const derived = deriveStateDrivenForecasts({
+      existingPredictions: [base, legacySupplyChain],
+      stateUnits: [
+        {
+          id: 'state-red-sea-fallback',
+          label: 'Red Sea constrained disruption state',
+          stateKind: 'transport_pressure',
+          dominantRegion: 'Red Sea',
+          dominantDomain: 'conflict',
+          regions: ['Red Sea'],
+          domains: ['conflict', 'infrastructure'],
+          actors: ['Regional shipping operators'],
+          branchKinds: ['base_case'],
+          signalTypes: ['energy_supply_shock', 'sovereign_stress'],
+          sourceSituationIds: ['sit-red-sea-fallback'],
+          situationIds: ['sit-red-sea-fallback'],
+          situationCount: 1,
+          forecastIds: [base.id, legacySupplyChain.id],
+          forecastCount: 2,
+          avgProbability: 0.42,
+          avgConfidence: 0.38,
+          topSignals: [{ type: 'energy_supply_shock', count: 2 }],
+          sampleTitles: [base.title, legacySupplyChain.title],
+        },
+      ],
+      worldSignals: {
+        signals: [
+          {
+            id: 'sig-energy-soft',
+            type: 'energy_supply_shock',
+            sourceType: 'critical_news',
+            region: 'Red Sea',
+            macroRegion: 'EMEA',
+            strength: 0.24,
+            confidence: 0.28,
+            label: 'Red Sea energy flows remain exposed',
+          },
+        ],
+      },
+      marketTransmission: {
+        edges: [
+          {
+            sourceSituationId: 'state-red-sea-fallback',
+            sourceLabel: 'Red Sea constrained disruption state',
+            targetBucketId: 'energy',
+            targetLabel: 'Energy',
+            channel: 'energy_supply_shock',
+            strength: 0.18,
+            confidence: 0.22,
+            supportingSignalIds: ['sig-energy-soft'],
+          },
+        ],
+      },
+      marketState: {
+        buckets: [
+          {
+            id: 'energy',
+            label: 'Energy',
+            pressureScore: 0.35,
+            confidence: 0.36,
+            macroConfirmation: 0.02,
+          },
+        ],
+      },
+      marketInputCoverage: {
+        commodities: 16,
+        gulfQuotes: 0,
+        shippingRates: 0,
+        fredSeries: 0,
+        bisExchange: 0,
+        bisPolicy: 0,
+        correlationCards: 0,
+      },
+    });
+
+    assert.equal(derived.length, 1);
+    assert.equal(derived[0].domain, 'market');
+    assert.equal(derived[0].generationOrigin, 'state_derived');
+    assert.equal(derived[0].stateDerivedBackfill, true);
+  });
 });
 
 describe('forecast run world state', () => {
