@@ -8,6 +8,7 @@ import {
   buildForecastTraceArtifacts,
   buildForecastRunWorldState,
   buildCrossSituationEffects,
+  buildSimulationMarketConsequences,
   buildReportableInteractionLedger,
   buildInteractionWatchlist,
   isCrossTheaterPair,
@@ -16,11 +17,14 @@ import {
   projectSituationClusters,
   refreshPublishedNarratives,
   selectPublishedForecastPool,
+  deriveStateDrivenForecasts,
   extractNewsClusterItems,
   selectUrgentCriticalNewsCandidates,
   validateCriticalSignalFrames,
   mapCriticalSignalFrameToSignals,
   extractCriticalNewsSignals,
+  buildImpactExpansionCandidateHash,
+  validateImpactHypotheses,
 } from '../scripts/seed-forecasts.mjs';
 
 import {
@@ -137,6 +141,10 @@ describe('forecast trace artifact builder', () => {
       cyber: 0,
       infrastructure: 0,
     });
+    assert.deepEqual(artifacts.summary.quality.fullRun.generationOriginCounts, {
+      legacy_detector: 2,
+    });
+    assert.equal(artifacts.summary.quality.fullRun.stateDerivedBackfillCount, 0);
     assert.deepEqual(artifacts.summary.quality.fullRun.highlightedDomainCounts, {
       conflict: 1,
       market: 0,
@@ -165,6 +173,9 @@ describe('forecast trace artifact builder', () => {
     assert.equal(artifacts.summary.quality.publish.suppressedSituationDomainCap, 1);
     assert.equal(artifacts.summary.quality.publish.cappedSituations, 1);
     assert.equal(artifacts.summary.quality.candidateRun.domainCounts.cyber, 1);
+    assert.deepEqual(artifacts.summary.quality.candidateRun.generationOriginCounts, {
+      legacy_detector: 3,
+    });
     assert.ok(artifacts.summary.quality.fullRun.quietDomains.includes('military'));
     assert.equal(artifacts.summary.quality.traced.topPromotionSignals[0].type, 'cii');
     assert.equal(artifacts.summary.worldStateSummary.scope, 'published');
@@ -250,6 +261,33 @@ describe('forecast trace artifact builder', () => {
       assert.ok(['escalatory', 'contested', 'constrained'].includes(forecastWorldState.simulationPosture), 'worldState.simulationPosture should be a valid posture');
       assert.ok(typeof forecastWorldState.simulationPostureScore === 'number', 'worldState.simulationPostureScore should be a number');
     }
+  });
+
+  it('stores full canonical narrative fields alongside compact short fields in trace artifacts', () => {
+    const pred = makePrediction('market', 'Strait of Hormuz', 'Energy repricing risk: Strait of Hormuz', 0.71, 0.64, '30d', [
+      { type: 'shipping_cost_shock', value: 'Strait of Hormuz rerouting is keeping freight costs elevated.', weight: 0.38 },
+    ]);
+    buildForecastCase(pred);
+    pred.scenario = 'Strait of Hormuz shipping disruption keeps freight and energy repricing active across the Gulf over the next 30d while LNG routes, tanker insurance costs, and importer hedging behavior continue to amplify the base path across multiple downstream markets and policy-sensitive sectors.';
+    pred.feedSummary = 'Strait of Hormuz disruption is still anchoring the main market path through higher freight, wider energy premia, and persistent rerouting pressure across Gulf-linked trade flows, even as participants avoid assuming a full corridor closure.';
+    pred.traceMeta = { narrativeSource: 'llm_combined' };
+
+    const artifacts = buildForecastTraceArtifacts(
+      {
+        generatedAt: Date.parse('2026-03-23T09:00:00Z'),
+        predictions: [pred],
+      },
+      { runId: 'trace-narrative-fields' },
+      { maxForecasts: 1 },
+    );
+
+    const traced = artifacts.forecasts[0].payload;
+    assert.ok(traced.scenario.length > 220);
+    assert.ok(traced.feedSummary.length > 220);
+    assert.ok(traced.scenarioShort.length < traced.scenario.length);
+    assert.ok(traced.feedSummaryShort.length < traced.feedSummary.length);
+    assert.match(traced.scenarioShort, /\.\.\.$/);
+    assert.match(traced.feedSummaryShort, /\.\.\.$/);
   });
 
   it('stores all forecasts by default when no explicit max is configured', () => {
@@ -371,6 +409,37 @@ describe('forecast trace artifact builder', () => {
     assert.equal(a.caseFile.situationContext.forecastCount, 1);
     assert.ok(!a.scenario.includes('broader cluster'));
     assert.ok(!a.feedSummary.includes('broader'));
+  });
+
+  it('preserves llm narratives after projected situation context refresh', () => {
+    const a = makePrediction('market', 'Strait of Hormuz', 'Inflation and rates pressure from Strait of Hormuz maritime disruption state', 0.72, 0.66, '30d', [
+      { type: 'shipping_cost_shock', value: 'Hormuz shipping costs are feeding inflation pressure', weight: 0.42 },
+    ]);
+    const b = makePrediction('market', 'Strait of Hormuz', 'Oil price impact from Strait of Hormuz disruption', 0.67, 0.58, '30d', [
+      { type: 'commodity_price', value: 'Oil pricing remains sensitive to Strait of Hormuz disruption', weight: 0.38 },
+    ]);
+
+    buildForecastCase(a);
+    buildForecastCase(b);
+    populateFallbackNarratives([a, b]);
+
+    a.traceMeta = { narrativeSource: 'llm_combined', llmProvider: 'openrouter' };
+    a.caseFile.baseCase = 'LLM base case keeps Hormuz inflation pressure elevated while freight rerouting and insurance costs remain sticky.';
+    a.caseFile.escalatoryCase = 'LLM escalatory case sees a broader price shock if corridor access worsens again.';
+    a.caseFile.contrarianCase = 'LLM contrarian case assumes shipping normalization starts before downstream pass-through broadens.';
+    a.scenario = 'LLM scenario keeps Hormuz repricing elevated without a full break in corridor access.';
+    a.feedSummary = 'LLM base case keeps Hormuz inflation pressure elevated while freight rerouting and insurance costs remain sticky.';
+
+    const fullRunSituationClusters = attachSituationContext([a, b]);
+    const publishedPredictions = [a];
+    const projectedClusters = projectSituationClusters(fullRunSituationClusters, publishedPredictions);
+    attachSituationContext(publishedPredictions, projectedClusters);
+    refreshPublishedNarratives(publishedPredictions);
+
+    assert.equal(a.caseFile.situationContext.forecastCount, 1);
+    assert.equal(a.caseFile.baseCase, 'LLM base case keeps Hormuz inflation pressure elevated while freight rerouting and insurance costs remain sticky.');
+    assert.equal(a.scenario, 'LLM scenario keeps Hormuz repricing elevated without a full break in corridor access.');
+    assert.equal(a.feedSummary, 'LLM base case keeps Hormuz inflation pressure elevated while freight rerouting and insurance costs remain sticky.');
   });
 });
 
@@ -496,6 +565,561 @@ describe('market transmission macro state', () => {
     assert.ok((marketConsequences?.items?.length || 0) <= 6);
     assert.ok((marketConsequences?.blockedCount || 0) >= 1);
   });
+
+  it('promotes direct core-bucket market consequences when critical signals are strong even if macro coverage is incomplete', () => {
+    const consequences = buildSimulationMarketConsequences({
+      situationSimulations: [
+        {
+          situationId: 'state-hormuz',
+          label: 'Hormuz closure pressure',
+          familyId: 'fam-hormuz',
+          familyLabel: 'Maritime supply shock',
+          dominantDomain: 'conflict',
+          dominantRegion: 'Middle East',
+          postureScore: 0.68,
+          avgConfidence: 0.58,
+          marketContext: {
+            linkedBucketIds: ['energy'],
+            confirmationScore: 0.57,
+            topTransmissionStrength: 0.62,
+            topTransmissionConfidence: 0.56,
+            topChannel: 'energy_supply_shock',
+            criticalSignalLift: 0.74,
+            criticalSignalTypes: ['energy_supply_shock', 'shipping_cost_shock', 'sovereign_stress'],
+            bucketContexts: {
+              energy: {
+                bucketId: 'energy',
+                bucketLabel: 'Energy',
+                edgeCount: 2,
+                topChannel: 'energy_supply_shock',
+                topTransmissionStrength: 0.66,
+                topTransmissionConfidence: 0.61,
+                supportingSignalIds: ['sig-energy', 'sig-route'],
+                supportingSignalTypes: ['energy_supply_shock', 'shipping_cost_shock'],
+              },
+            },
+          },
+        },
+      ],
+    }, {
+      buckets: [
+        {
+          id: 'energy',
+          label: 'Energy',
+          pressureScore: 0.42,
+          confidence: 0.46,
+          macroConfirmation: 0.04,
+        },
+      ],
+    }, {
+      marketInputCoverage: {
+        commodities: 14,
+        gulfQuotes: 12,
+        fredSeries: 0,
+        shippingRates: 0,
+        bisExchange: 0,
+        bisPolicy: 0,
+        correlationCards: 0,
+      },
+    });
+
+    assert.equal(consequences.items.length, 1);
+    assert.equal(consequences.items[0].targetBucketId, 'energy');
+    assert.ok((consequences.items[0].effectiveMacroConfirmation || 0) > 0.04);
+    assert.ok((consequences.items[0].criticalAlignment || 0) > 0.3);
+    assert.ok(!consequences.blocked.some((item) => item.reason === 'low_macro_confirmation'));
+  });
+
+  it('blocks direct energy consequences that only have sovereign-stress support', () => {
+    const consequences = buildSimulationMarketConsequences({
+      situationSimulations: [
+        {
+          situationId: 'state-brazil',
+          label: 'Brazil security escalation state',
+          familyId: 'fam-brazil',
+          familyLabel: 'Brazil security pressure family',
+          dominantDomain: 'conflict',
+          dominantRegion: 'Brazil',
+          postureScore: 0.71,
+          avgConfidence: 0.62,
+          marketContext: {
+            linkedBucketIds: ['energy'],
+            confirmationScore: 0.64,
+            topTransmissionStrength: 0.68,
+            topTransmissionConfidence: 0.59,
+            topChannel: 'sovereign_stress',
+            criticalSignalLift: 0.12,
+            criticalSignalTypes: ['sovereign_stress'],
+            bucketContexts: {
+              energy: {
+                bucketId: 'energy',
+                bucketLabel: 'Energy',
+                edgeCount: 2,
+                topChannel: 'sovereign_stress',
+                topTransmissionStrength: 0.68,
+                topTransmissionConfidence: 0.59,
+                supportingSignalIds: ['sig-sovereign'],
+                supportingSignalTypes: ['sovereign_stress'],
+              },
+            },
+          },
+        },
+      ],
+    }, {
+      buckets: [
+        {
+          id: 'energy',
+          label: 'Energy',
+          pressureScore: 0.51,
+          confidence: 0.55,
+          macroConfirmation: 0.18,
+        },
+      ],
+    }, {
+      marketInputCoverage: {
+        commodities: 12,
+        gulfQuotes: 8,
+        fredSeries: 10,
+        shippingRates: 0,
+        bisExchange: 0,
+        bisPolicy: 11,
+        correlationCards: 16,
+      },
+    });
+
+    assert.equal(consequences.items.length, 0);
+    assert.ok(consequences.blocked.some((item) => item.reason === 'inadmissible_bucket_channel'));
+  });
+});
+
+describe('publish selection', () => {
+  it('prefers unique state anchors before taking same-state follow-ons', () => {
+    const a = makePrediction('political', 'Middle East', 'State A political pressure', 0.71, 0.59, '7d', []);
+    const b = makePrediction('conflict', 'Middle East', 'State A conflict pressure', 0.69, 0.58, '7d', []);
+    const c = makePrediction('market', 'Red Sea', 'State B freight pressure', 0.63, 0.57, '7d', []);
+
+    for (const pred of [a, b, c]) {
+      pred.readiness = { overall: 0.74 };
+      pred.analysisPriority = 0.66;
+      pred.traceMeta = { narrativeSource: 'llm_combined' };
+    }
+
+    a.stateContext = { id: 'state-a', label: 'State A', dominantRegion: 'Middle East', dominantDomain: 'political', forecastCount: 3, topSignals: [{ type: 'sovereign_stress' }] };
+    b.stateContext = { id: 'state-a', label: 'State A', dominantRegion: 'Middle East', dominantDomain: 'conflict', forecastCount: 3, topSignals: [{ type: 'sovereign_stress' }] };
+    c.stateContext = { id: 'state-b', label: 'State B', dominantRegion: 'Red Sea', dominantDomain: 'market', forecastCount: 1, topSignals: [{ type: 'shipping_cost_shock' }] };
+
+    a.familyContext = { id: 'fam-a1', forecastCount: 1 };
+    b.familyContext = { id: 'fam-a2', forecastCount: 1 };
+    c.familyContext = { id: 'fam-b', forecastCount: 1 };
+
+    a.marketSelectionContext = { confirmationScore: 0.34, contradictionScore: 0, topBucketId: 'sovereign_risk', topBucketLabel: 'Sovereign Risk', topBucketPressure: 0.31, transmissionEdgeCount: 1, criticalSignalLift: 0.18, criticalSignalCount: 1, topChannel: 'political_pressure' };
+    b.marketSelectionContext = { confirmationScore: 0.36, contradictionScore: 0, topBucketId: 'sovereign_risk', topBucketLabel: 'Sovereign Risk', topBucketPressure: 0.34, transmissionEdgeCount: 1, criticalSignalLift: 0.2, criticalSignalCount: 1, topChannel: 'security_spillover' };
+    c.marketSelectionContext = { confirmationScore: 0.57, contradictionScore: 0, topBucketId: 'freight', topBucketLabel: 'Freight', topBucketPressure: 0.56, transmissionEdgeCount: 2, criticalSignalLift: 0.61, criticalSignalCount: 2, topChannel: 'shipping_cost_shock' };
+
+    const selected = selectPublishedForecastPool([a, b, c], { targetCount: 2 });
+    const selectedStateIds = selected.map((pred) => pred.stateContext?.id);
+
+    assert.deepEqual(selectedStateIds.sort(), ['state-a', 'state-b']);
+    assert.ok(selected.some((pred) => pred.id === c.id));
+  });
+});
+
+describe('state-driven domain derivation', () => {
+  it('derives market and supply-chain forecasts from strong state transmission when legacy detectors miss', () => {
+    const base = makePrediction('conflict', 'Red Sea', 'Escalation risk: Red Sea maritime pressure', 0.72, 0.61, '7d', [
+      { type: 'shipping_cost_shock', value: 'Shipping costs are surging around the Red Sea corridor', weight: 0.4 },
+      { type: 'energy_supply_shock', value: 'Energy flows remain exposed to Red Sea disruption', weight: 0.35 },
+    ]);
+    base.stateContext = {
+      id: 'state-red-sea',
+      label: 'Red Sea maritime disruption state',
+      dominantRegion: 'Red Sea',
+      dominantDomain: 'conflict',
+      domains: ['conflict', 'infrastructure'],
+      topSignals: [{ type: 'shipping_cost_shock' }, { type: 'energy_supply_shock' }],
+    };
+
+    const derived = deriveStateDrivenForecasts({
+      existingPredictions: [base],
+      stateUnits: [
+        {
+          id: 'state-red-sea',
+          label: 'Red Sea maritime disruption state',
+          stateKind: 'transport_pressure',
+          dominantRegion: 'Red Sea',
+          dominantDomain: 'conflict',
+          regions: ['Red Sea'],
+          domains: ['conflict', 'infrastructure'],
+          actors: ['Regional shipping operators'],
+          branchKinds: ['base_case'],
+          signalTypes: ['shipping_cost_shock', 'energy_supply_shock', 'sovereign_stress'],
+          sourceSituationIds: ['sit-red-sea'],
+          situationIds: ['sit-red-sea'],
+          situationCount: 1,
+          forecastIds: [base.id],
+          forecastCount: 1,
+          avgProbability: 0.72,
+          avgConfidence: 0.61,
+          topSignals: [{ type: 'shipping_cost_shock', count: 3 }, { type: 'energy_supply_shock', count: 2 }],
+          sampleTitles: [base.title],
+        },
+      ],
+      worldSignals: {
+        signals: [
+          {
+            id: 'sig-ship',
+            type: 'shipping_cost_shock',
+            sourceType: 'critical_news',
+            region: 'Red Sea',
+            macroRegion: 'EMEA',
+            strength: 0.74,
+            confidence: 0.68,
+            label: 'Red Sea shipping costs are surging',
+          },
+          {
+            id: 'sig-energy',
+            type: 'energy_supply_shock',
+            sourceType: 'critical_news',
+            region: 'Red Sea',
+            macroRegion: 'EMEA',
+            strength: 0.71,
+            confidence: 0.64,
+            label: 'Red Sea energy flows are at risk',
+          },
+          {
+            id: 'sig-sovereign',
+            type: 'sovereign_stress',
+            sourceType: 'critical_news',
+            region: 'Red Sea',
+            macroRegion: 'EMEA',
+            strength: 0.58,
+            confidence: 0.6,
+            label: 'Regional sovereign stress is rising',
+          },
+        ],
+      },
+      marketTransmission: {
+        edges: [
+          {
+            sourceSituationId: 'state-red-sea',
+            sourceLabel: 'Red Sea maritime disruption state',
+            targetBucketId: 'freight',
+            targetLabel: 'Freight',
+            channel: 'shipping_cost_shock',
+            strength: 0.76,
+            confidence: 0.68,
+            supportingSignalIds: ['sig-ship', 'sig-energy'],
+          },
+          {
+            sourceSituationId: 'state-red-sea',
+            sourceLabel: 'Red Sea maritime disruption state',
+            targetBucketId: 'energy',
+            targetLabel: 'Energy',
+            channel: 'energy_supply_shock',
+            strength: 0.69,
+            confidence: 0.63,
+            supportingSignalIds: ['sig-energy', 'sig-ship'],
+          },
+        ],
+      },
+      marketState: {
+        buckets: [
+          {
+            id: 'freight',
+            label: 'Freight',
+            pressureScore: 0.78,
+            confidence: 0.69,
+            macroConfirmation: 0.02,
+          },
+          {
+            id: 'energy',
+            label: 'Energy',
+            pressureScore: 0.74,
+            confidence: 0.66,
+            macroConfirmation: 0.03,
+          },
+        ],
+      },
+      marketInputCoverage: {
+        commodities: 16,
+        gulfQuotes: 12,
+        shippingRates: 0,
+        fredSeries: 0,
+        bisExchange: 0,
+        bisPolicy: 0,
+        correlationCards: 0,
+      },
+    });
+
+    const derivedDomains = derived.map((pred) => pred.domain).sort();
+    assert.deepEqual(derivedDomains, ['market', 'supply_chain']);
+    assert.ok(derived.every((pred) => pred.generationOrigin === 'state_derived'));
+    assert.ok(derived.some((pred) => pred.title.includes('Energy repricing risk')));
+    assert.ok(derived.some((pred) => pred.title.includes('Supply chain disruption risk')));
+    assert.ok(derived.every((pred) => !pred.feedSummary.includes('pressure is')));
+    assert.ok(derived.every((pred) => !pred.feedSummary.endsWith('...')));
+  });
+
+  it('uses a state-derived backfill only when scores miss the main threshold but clear the fallback floor', () => {
+    const base = makePrediction('conflict', 'Red Sea', 'Escalation risk: constrained maritime pressure', 0.5, 0.45, '7d', [
+      { type: 'energy_supply_shock', value: 'Energy flows remain exposed to Red Sea disruption', weight: 0.24 },
+    ]);
+    base.stateContext = {
+      id: 'state-red-sea-fallback',
+      label: 'Red Sea constrained disruption state',
+      dominantRegion: 'Red Sea',
+      dominantDomain: 'conflict',
+      domains: ['conflict', 'infrastructure'],
+      topSignals: [{ type: 'energy_supply_shock' }],
+    };
+
+    const legacySupplyChain = makePrediction('supply_chain', 'Red Sea', 'Supply chain disruption: Red Sea corridor', 0.41, 0.39, '7d', [
+      { type: 'shipping_cost_shock', value: 'Shipping costs remain elevated around the corridor', weight: 0.22 },
+    ]);
+    legacySupplyChain.stateContext = {
+      id: 'state-red-sea-fallback',
+      label: 'Red Sea constrained disruption state',
+      dominantRegion: 'Red Sea',
+      dominantDomain: 'supply_chain',
+      domains: ['supply_chain'],
+      topSignals: [{ type: 'shipping_cost_shock' }],
+    };
+
+    const derived = deriveStateDrivenForecasts({
+      existingPredictions: [base, legacySupplyChain],
+      stateUnits: [
+        {
+          id: 'state-red-sea-fallback',
+          label: 'Red Sea constrained disruption state',
+          stateKind: 'transport_pressure',
+          dominantRegion: 'Red Sea',
+          dominantDomain: 'conflict',
+          regions: ['Red Sea'],
+          domains: ['conflict', 'infrastructure'],
+          actors: ['Regional shipping operators'],
+          branchKinds: ['base_case'],
+          signalTypes: ['energy_supply_shock', 'sovereign_stress'],
+          sourceSituationIds: ['sit-red-sea-fallback'],
+          situationIds: ['sit-red-sea-fallback'],
+          situationCount: 1,
+          forecastIds: [base.id, legacySupplyChain.id],
+          forecastCount: 2,
+          avgProbability: 0.42,
+          avgConfidence: 0.38,
+          topSignals: [{ type: 'energy_supply_shock', count: 2 }],
+          sampleTitles: [base.title, legacySupplyChain.title],
+        },
+      ],
+      worldSignals: {
+        signals: [
+          {
+            id: 'sig-energy-soft',
+            type: 'energy_supply_shock',
+            sourceType: 'critical_news',
+            region: 'Red Sea',
+            macroRegion: 'EMEA',
+            strength: 0.24,
+            confidence: 0.28,
+            label: 'Red Sea energy flows remain exposed',
+          },
+        ],
+      },
+      marketTransmission: {
+        edges: [
+          {
+            sourceSituationId: 'state-red-sea-fallback',
+            sourceLabel: 'Red Sea constrained disruption state',
+            targetBucketId: 'energy',
+            targetLabel: 'Energy',
+            channel: 'energy_supply_shock',
+            strength: 0.18,
+            confidence: 0.22,
+            supportingSignalIds: ['sig-energy-soft'],
+          },
+        ],
+      },
+      marketState: {
+        buckets: [
+          {
+            id: 'energy',
+            label: 'Energy',
+            pressureScore: 0.35,
+            confidence: 0.36,
+            macroConfirmation: 0.02,
+          },
+        ],
+      },
+      marketInputCoverage: {
+        commodities: 16,
+        gulfQuotes: 0,
+        shippingRates: 0,
+        fredSeries: 0,
+        bisExchange: 0,
+        bisPolicy: 0,
+        correlationCards: 0,
+      },
+    });
+
+    assert.equal(derived.length, 1);
+    assert.equal(derived[0].domain, 'market');
+    assert.equal(derived[0].generationOrigin, 'state_derived');
+    assert.equal(derived[0].stateDerivedBackfill, true);
+  });
+
+  it('does not derive a market forecast when the direct bucket only has an allowed but semantically mismatched channel', () => {
+    const base = makePrediction('conflict', 'Red Sea', 'Escalation risk: Red Sea maritime pressure', 0.69, 0.58, '7d', [
+      { type: 'shipping_cost_shock', value: 'Shipping routes remain under pressure', weight: 0.35 },
+    ]);
+    base.stateContext = {
+      id: 'state-red-sea-mismatch',
+      label: 'Red Sea maritime disruption state',
+      dominantRegion: 'Red Sea',
+      dominantDomain: 'conflict',
+      domains: ['conflict', 'supply_chain'],
+      topSignals: [{ type: 'shipping_cost_shock' }],
+    };
+
+    const derived = deriveStateDrivenForecasts({
+      existingPredictions: [base],
+      stateUnits: [
+        {
+          id: 'state-red-sea-mismatch',
+          label: 'Red Sea maritime disruption state',
+          stateKind: 'transport_pressure',
+          dominantRegion: 'Red Sea',
+          dominantDomain: 'conflict',
+          regions: ['Red Sea'],
+          domains: ['conflict', 'supply_chain'],
+          actors: ['Regional shipping operators'],
+          branchKinds: ['base_case'],
+          signalTypes: ['shipping_cost_shock'],
+          sourceSituationIds: ['sit-red-sea-mismatch'],
+          situationIds: ['sit-red-sea-mismatch'],
+          situationCount: 1,
+          forecastIds: [base.id],
+          forecastCount: 1,
+          avgProbability: 0.69,
+          avgConfidence: 0.58,
+          topSignals: [{ type: 'shipping_cost_shock', count: 3 }],
+          sampleTitles: [base.title],
+        },
+      ],
+      worldSignals: {
+        signals: [
+          {
+            id: 'sig-ship-only',
+            type: 'shipping_cost_shock',
+            sourceType: 'critical_news',
+            region: 'Red Sea',
+            macroRegion: 'EMEA',
+            strength: 0.73,
+            confidence: 0.66,
+            label: 'Red Sea shipping costs are surging',
+          },
+        ],
+      },
+      marketTransmission: {
+        edges: [
+          {
+            sourceSituationId: 'state-red-sea-mismatch',
+            sourceLabel: 'Red Sea maritime disruption state',
+            targetBucketId: 'energy',
+            targetLabel: 'Energy',
+            channel: 'shipping_cost_shock',
+            strength: 0.72,
+            confidence: 0.64,
+            supportingSignalIds: ['sig-ship-only'],
+          },
+        ],
+      },
+      marketState: {
+        buckets: [
+          {
+            id: 'energy',
+            label: 'Energy',
+            pressureScore: 0.74,
+            confidence: 0.66,
+            macroConfirmation: 0.04,
+          },
+        ],
+      },
+      marketInputCoverage: {
+        commodities: 14,
+        gulfQuotes: 10,
+        shippingRates: 0,
+        fredSeries: 0,
+        bisExchange: 0,
+        bisPolicy: 0,
+        correlationCards: 0,
+      },
+    });
+
+    assert.equal(derived.some((pred) => pred.domain === 'market'), false);
+  });
+
+  it('keeps state-derived market clustering coherent across source states and buckets', () => {
+    const indiaFx = makePrediction('market', 'India', 'FX stress from India cyber pressure state', 0.58, 0.56, '14d', [
+      { type: 'risk_off_rotation', value: 'Risk-off pricing is pressuring India FX', weight: 0.36 },
+    ]);
+    buildForecastCase(indiaFx);
+    indiaFx.stateDerivation = {
+      sourceStateId: 'state-india-fx',
+      sourceStateLabel: 'India cyber pressure state',
+      sourceStateKind: 'cyber_pressure',
+      bucketId: 'fx_stress',
+      bucketLabel: 'FX Stress',
+      channel: 'fx_stress',
+      macroRegion: 'SOUTH_ASIA',
+    };
+
+    const redSeaEnergy = makePrediction('market', 'Red Sea', 'Energy repricing risk from Red Sea maritime disruption state', 0.66, 0.59, '14d', [
+      { type: 'energy_supply_shock', value: 'Red Sea disruption is pressuring energy flows', weight: 0.4 },
+    ]);
+    buildForecastCase(redSeaEnergy);
+    redSeaEnergy.stateDerivation = {
+      sourceStateId: 'state-red-sea-maritime',
+      sourceStateLabel: 'Red Sea maritime disruption state',
+      sourceStateKind: 'transport_pressure',
+      bucketId: 'energy',
+      bucketLabel: 'Energy',
+      channel: 'energy_supply_shock',
+      macroRegion: 'MENA',
+    };
+
+    const redSeaFreight = makePrediction('supply_chain', 'Red Sea', 'Maritime energy flow disruption from Red Sea maritime disruption state', 0.64, 0.58, '14d', [
+      { type: 'shipping_cost_shock', value: 'Freight routes are rerouting around the Red Sea corridor', weight: 0.39 },
+    ]);
+    buildForecastCase(redSeaFreight);
+    redSeaFreight.stateDerivation = {
+      sourceStateId: 'state-red-sea-maritime',
+      sourceStateLabel: 'Red Sea maritime disruption state',
+      sourceStateKind: 'transport_pressure',
+      bucketId: 'freight',
+      bucketLabel: 'Freight',
+      channel: 'shipping_cost_shock',
+      macroRegion: 'MENA',
+    };
+
+    const worldState = buildForecastRunWorldState({
+      generatedAt: Date.parse('2026-03-23T06:00:00Z'),
+      predictions: [indiaFx, redSeaEnergy, redSeaFreight],
+    });
+
+    const marketLikeClusters = (worldState.situationClusters || []).filter((cluster) => (
+      (cluster.domains || []).some((domain) => ['market', 'supply_chain'].includes(domain))
+    ));
+    const indiaCluster = marketLikeClusters.find((cluster) => cluster.forecastIds.includes(indiaFx.id));
+    const redSeaCluster = marketLikeClusters.find((cluster) => cluster.forecastIds.includes(redSeaEnergy.id) || cluster.forecastIds.includes(redSeaFreight.id));
+
+    assert.equal(marketLikeClusters.length, 2);
+    assert.ok(indiaCluster);
+    assert.ok(redSeaCluster);
+    assert.equal(indiaCluster.forecastIds.includes(redSeaEnergy.id), false);
+    assert.equal(indiaCluster.forecastIds.includes(redSeaFreight.id), false);
+    assert.equal(redSeaCluster.forecastIds.includes(indiaFx.id), false);
+    assert.deepEqual(indiaCluster.sourceStateIds, ['state-india-fx']);
+    assert.deepEqual(redSeaCluster.sourceStateIds, ['state-red-sea-maritime']);
+  });
 });
 
 describe('forecast run world state', () => {
@@ -594,6 +1218,35 @@ describe('forecast run world state', () => {
     assert.ok(Array.isArray(worldState.report.simulationWatchlist));
     assert.ok(Array.isArray(worldState.report.simulationOutcomeSummaries));
     assert.ok(Array.isArray(worldState.report.crossSituationEffects));
+  });
+
+  it('keeps broad non-maritime pressure states from merging across regions without a real spine', () => {
+    const germanyCyber = makePrediction('cyber', 'Germany', 'Cyber pressure: Germany telecom networks', 0.58, 0.56, '14d', [
+      { type: 'cyber', value: 'Germany telecom intrusion pressure remains elevated.', weight: 0.38 },
+    ]);
+    const usCyber = makePrediction('cyber', 'United States', 'Cyber pressure: United States grid networks', 0.57, 0.55, '14d', [
+      { type: 'cyber', value: 'United States grid intrusion pressure remains elevated.', weight: 0.37 },
+    ]);
+
+    buildForecastCase(germanyCyber);
+    buildForecastCase(usCyber);
+    populateFallbackNarratives([germanyCyber, usCyber]);
+    germanyCyber.caseFile.actors = [{ id: 'actor-germany-cert', name: 'German CERT', role: 'defender' }];
+    usCyber.caseFile.actors = [{ id: 'actor-us-grid', name: 'US Grid Operators', role: 'defender' }];
+
+    const worldState = buildForecastRunWorldState({
+      generatedAt: Date.parse('2026-03-23T10:30:00Z'),
+      predictions: [germanyCyber, usCyber],
+    });
+
+    assert.equal(
+      worldState.situationClusters.some((cluster) => cluster.regions.includes('Germany') && cluster.regions.includes('United States')),
+      false,
+    );
+    assert.equal(
+      worldState.stateUnits.some((unit) => unit.regions.includes('Germany') && unit.regions.includes('United States')),
+      false,
+    );
   });
 
   it('reports full actor continuity counts even when previews are capped', () => {
@@ -1004,8 +1657,8 @@ describe('forecast run world state', () => {
     assert.ok((supplyUnit?.postureScore || 0) < 0.77);
     assert.ok((marketUnit?.marketContext?.confirmationScore || 0) > 0);
     assert.ok((supplyUnit?.marketContext?.linkedBucketIds || []).length >= 1);
-    assert.ok((worldState.simulationState.marketConsequences?.items || []).length >= 1);
-    assert.ok((worldState.report.marketConsequenceWatchlist || []).length >= 1);
+    assert.equal(worldState.simulationState.marketConsequences?.reportableCount || 0, 0);
+    assert.ok((worldState.simulationState.marketConsequences?.blockedCount || 0) >= 1);
   });
 
   it('builds report outputs from simulation outcomes and cross-situation effects', () => {
@@ -1332,9 +1985,15 @@ describe('forecast run world state', () => {
     cyberUnit.postureScore = 0.422;
     cyberUnit.totalPressure = 0.59;
     cyberUnit.totalStabilization = 0.28;
-    cyberUnit.effectChannels = [{ type: 'regional_spillover', count: 1 }];
+    cyberUnit.effectChannels = [{ type: 'regional_spillover', count: 2 }];
+    patchedSimulationState.interactionLedger = (patchedSimulationState.interactionLedger || []).map((item) => ({
+      ...item,
+      confidence: 0.94,
+      actorSpecificity: 0.95,
+      sharedActor: true,
+    }));
 
-    const effects = buildCrossSituationEffects(patchedSimulationState);
+    const effects = buildCrossSituationEffects(patchedSimulationState, { mode: 'internal' });
     assert.ok(effects.some((item) => item.channel === 'regional_spillover' && item.relation === 'regional pressure transfer'));
   });
 
@@ -1575,7 +2234,137 @@ describe('forecast run world state', () => {
 
     assert.ok(Array.isArray(worldState.simulationState.reportableInteractionLedger));
     assert.equal(worldState.simulationState.reportableInteractionLedger.length, 0);
+    assert.equal(worldState.simulationState.blockedInteractionSummary.totalBlocked, 0);
     assert.equal(worldState.report.interactionWatchlist.length, 0);
+  });
+
+  it('does not emit reportable effects when no interactions promote into the reportable ledger', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-source',
+          label: 'Red Sea supply chain situation',
+          dominantDomain: 'supply_chain',
+          familyId: 'fam-red-sea',
+          familyLabel: 'Red Sea maritime supply family',
+          regions: ['Red Sea'],
+          actorIds: ['actor-shipping'],
+          effectChannels: [{ type: 'logistics_disruption', count: 3 }],
+          posture: 'escalatory',
+          postureScore: 0.71,
+          totalPressure: 0.82,
+          totalStabilization: 0.22,
+        },
+        {
+          situationId: 'sit-target',
+          label: 'Middle East market situation',
+          dominantDomain: 'market',
+          familyId: 'fam-middle-east',
+          familyLabel: 'Middle East market repricing family',
+          regions: ['Middle East'],
+          actorIds: ['actor-market'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.53,
+          totalPressure: 0.61,
+          totalStabilization: 0.29,
+        },
+      ],
+      interactionLedger: [
+        {
+          sourceSituationId: 'sit-source',
+          targetSituationId: 'sit-target',
+          sourceLabel: 'Red Sea supply chain situation',
+          targetLabel: 'Middle East market situation',
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+          interactionType: 'regional_spillover',
+          strongestChannel: 'logistics_disruption',
+          score: 4.9,
+          confidence: 0.76,
+          actorSpecificity: 0.86,
+          stage: 'round_2',
+        },
+      ],
+      reportableInteractionLedger: [],
+    }, { mode: 'reportable' });
+
+    assert.equal(effects.length, 0);
+    assert.ok(Array.isArray(effects.blocked));
+    assert.equal(effects.blocked.length, 0);
+  });
+
+  it('returns reportable effects and blocked metadata when the reportable interaction ledger is populated', () => {
+    const effects = buildCrossSituationEffects({
+      situationSimulations: [
+        {
+          situationId: 'sit-source',
+          label: 'Baltic Sea supply chain situation',
+          dominantDomain: 'supply_chain',
+          familyId: 'fam-baltic',
+          familyLabel: 'Baltic maritime supply family',
+          regions: ['Baltic Sea'],
+          actorIds: ['actor-shipping'],
+          effectChannels: [{ type: 'logistics_disruption', count: 3 }],
+          posture: 'escalatory',
+          postureScore: 0.74,
+          totalPressure: 0.84,
+          totalStabilization: 0.21,
+        },
+        {
+          situationId: 'sit-target',
+          label: 'Black Sea market situation',
+          dominantDomain: 'market',
+          familyId: 'fam-black-sea',
+          familyLabel: 'Black Sea market repricing family',
+          regions: ['Black Sea'],
+          actorIds: ['actor-market'],
+          effectChannels: [],
+          posture: 'contested',
+          postureScore: 0.49,
+          totalPressure: 0.58,
+          totalStabilization: 0.31,
+        },
+      ],
+      reportableInteractionLedger: [
+        {
+          sourceSituationId: 'sit-source',
+          targetSituationId: 'sit-target',
+          sourceLabel: 'Baltic Sea supply chain situation',
+          targetLabel: 'Black Sea market situation',
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+          interactionType: 'regional_spillover',
+          strongestChannel: 'logistics_disruption',
+          score: 5.2,
+          confidence: 0.79,
+          actorSpecificity: 0.91,
+          sharedActor: false,
+          regionLink: false,
+          stage: 'round_2',
+        },
+        {
+          sourceSituationId: 'sit-source',
+          targetSituationId: 'sit-target',
+          sourceLabel: 'Baltic Sea supply chain situation',
+          targetLabel: 'Black Sea market situation',
+          sourceActorName: 'Shipping operator',
+          targetActorName: 'Commodity desk',
+          interactionType: 'regional_spillover',
+          strongestChannel: 'logistics_disruption',
+          score: 5.1,
+          confidence: 0.78,
+          actorSpecificity: 0.91,
+          sharedActor: false,
+          regionLink: false,
+          stage: 'round_3',
+        },
+      ],
+    }, { mode: 'reportable' });
+
+    assert.ok(effects.length >= 1);
+    assert.ok(effects.some((item) => item.channel === 'logistics_disruption'));
+    assert.ok(Array.isArray(effects.blocked));
   });
 
   it('aggregates cross-situation effects across reportable interaction ledgers larger than 32 rows', () => {
@@ -1866,6 +2655,50 @@ describe('forecast run world state', () => {
     ], [source, target]);
 
     assert.equal(reportable.length, 0);
+  });
+
+  it('blocks non-political reportable interactions when they have neither structural nor market linkage', () => {
+    const source = {
+      situationId: 'sit-source',
+      label: 'Germany cyber situation',
+      dominantDomain: 'cyber',
+      regions: ['Germany'],
+      actorIds: ['actor-germany'],
+      marketContext: {
+        confirmationScore: 0.24,
+        linkedBucketIds: ['fx_stress'],
+      },
+    };
+    const target = {
+      situationId: 'sit-target',
+      label: 'Japan infrastructure situation',
+      dominantDomain: 'infrastructure',
+      regions: ['Japan'],
+      actorIds: ['actor-japan'],
+      marketContext: {
+        confirmationScore: 0.22,
+        linkedBucketIds: ['freight'],
+      },
+    };
+
+    const reportable = buildReportableInteractionLedger([
+      {
+        sourceSituationId: source.situationId,
+        targetSituationId: target.situationId,
+        sourceLabel: source.label,
+        targetLabel: target.label,
+        strongestChannel: 'service_disruption',
+        interactionType: 'regional_spillover',
+        score: 5.9,
+        confidence: 0.81,
+        actorSpecificity: 0.9,
+        sharedActor: false,
+        regionLink: false,
+      },
+    ], [source, target]);
+
+    assert.equal(reportable.length, 0);
+    assert.equal(reportable.blocked[0]?.reason, 'no_structural_or_market_link');
   });
 
   it('blocks cross-theater political effects even with shared-actor when actorSpec below 0.90', () => {
@@ -2407,6 +3240,363 @@ describe('cross-theater gate', () => {
   });
 });
 
+describe('impact expansion layer', () => {
+  function makeImpactCandidatePacket(stateId = 'state-1', label = 'Strait of Hormuz maritime disruption state', overrides = {}) {
+    return {
+      candidateIndex: 0,
+      candidateStateId: stateId,
+      candidateStateLabel: label,
+      stateKind: 'maritime_disruption',
+      dominantRegion: 'Middle East',
+      macroRegions: ['EMEA'],
+      countries: ['Middle East', 'Qatar'],
+      marketBucketIds: ['energy', 'freight', 'rates_inflation'],
+      transmissionChannels: ['shipping_cost_shock', 'gas_supply_stress'],
+      topSignalTypes: ['shipping_cost_shock', 'energy_supply_shock'],
+      criticalSignalTypes: ['shipping_cost_shock', 'gas_supply_stress'],
+      routeFacilityKey: 'Strait of Hormuz',
+      commodityKey: 'lng',
+      specificityScore: 0.8,
+      continuityMode: 'persistent_strengthened',
+      continuityScore: 1,
+      rankingScore: 0.92,
+      evidenceTable: [
+        { key: 'E1', kind: 'state_summary', text: 'Strait of Hormuz shipping pressure is active.' },
+        { key: 'E2', kind: 'headline', text: 'Qatar LNG export risk is rising as route security deteriorates.' },
+      ],
+      marketContext: {
+        topBucketId: 'energy',
+        topBucketLabel: 'Energy',
+        topBucketPressure: 0.83,
+        confirmationScore: 0.72,
+        contradictionScore: 0.08,
+        topChannel: 'gas_supply_stress',
+        topTransmissionStrength: 0.76,
+        topTransmissionConfidence: 0.69,
+        transmissionEdgeCount: 3,
+        criticalSignalLift: 0.64,
+        criticalSignalTypes: ['shipping_cost_shock', 'gas_supply_stress'],
+        linkedBucketIds: ['energy', 'freight', 'rates_inflation'],
+        consequenceSummary: 'Strait of Hormuz is transmitting into Energy through gas supply stress.',
+      },
+      stateSummary: {
+        avgProbability: 0.71,
+        avgConfidence: 0.63,
+        situationCount: 1,
+        forecastCount: 1,
+        sampleTitles: ['Shipping disruption: Strait of Hormuz'],
+        actors: ['Regional command authority'],
+        signalTypes: ['shipping_cost_shock'],
+      },
+      ...overrides,
+    };
+  }
+
+  function makeImpactExpansionBundle(stateId = 'state-1', label = 'Strait of Hormuz maritime disruption state', packetOverrides = {}) {
+    const candidatePacket = makeImpactCandidatePacket(stateId, label, packetOverrides);
+    return {
+      source: 'live',
+      provider: 'test',
+      model: 'test-model',
+      parseStage: 'object_candidates',
+      rawPreview: '',
+      failureReason: '',
+      candidateCount: 1,
+      extractedCandidateCount: 1,
+      extractedHypothesisCount: 3,
+      candidates: [{
+        candidateIndex: 0,
+        candidateStateId: candidatePacket.candidateStateId,
+        label: candidatePacket.candidateStateLabel,
+        stateKind: candidatePacket.stateKind,
+        dominantRegion: candidatePacket.dominantRegion,
+        rankingScore: candidatePacket.rankingScore,
+        topBucketId: candidatePacket.marketContext.topBucketId,
+        topBucketLabel: candidatePacket.marketContext.topBucketLabel,
+        topChannel: candidatePacket.marketContext.topChannel,
+        transmissionEdgeCount: candidatePacket.marketContext.transmissionEdgeCount,
+        routeFacilityKey: candidatePacket.routeFacilityKey,
+        commodityKey: candidatePacket.commodityKey,
+      }],
+      candidatePackets: [candidatePacket],
+      extractedCandidates: [{
+        candidateIndex: 0,
+        candidateStateId: candidatePacket.candidateStateId,
+        directHypotheses: [
+          {
+            variableKey: 'lng_export_stress',
+            channel: 'gas_supply_stress',
+            targetBucket: 'energy',
+            region: 'Middle East',
+            macroRegion: 'EMEA',
+            countries: ['Qatar'],
+            assetsOrSectors: ['LNG exports'],
+            commodity: 'lng',
+            dependsOnKey: '',
+            strength: 0.95,
+            confidence: 0.92,
+            analogTag: 'lng_export_disruption',
+            summary: 'LNG export stress is rising through the Strait of Hormuz route.',
+            evidenceRefs: ['E1', 'E2'],
+          },
+        ],
+        secondOrderHypotheses: [
+          {
+            variableKey: 'inflation_pass_through',
+            channel: 'inflation_impulse',
+            targetBucket: 'rates_inflation',
+            region: 'Middle East',
+            macroRegion: 'EMEA',
+            countries: ['Qatar'],
+            assetsOrSectors: ['Importers'],
+            commodity: 'lng',
+            dependsOnKey: 'lng_export_stress',
+            strength: 0.92,
+            confidence: 0.9,
+            analogTag: 'inflation_pass_through',
+            summary: 'Import costs are feeding inflation pass-through from LNG stress.',
+            evidenceRefs: ['E1', 'E2'],
+          },
+        ],
+        thirdOrderHypotheses: [
+          {
+            variableKey: 'sovereign_funding_stress',
+            channel: 'sovereign_stress',
+            targetBucket: 'sovereign_risk',
+            region: 'Middle East',
+            macroRegion: 'EMEA',
+            countries: ['Qatar'],
+            assetsOrSectors: ['Sovereign issuers'],
+            commodity: 'lng',
+            dependsOnKey: 'inflation_pass_through',
+            strength: 0.92,
+            confidence: 0.9,
+            analogTag: 'sovereign_funding_stress',
+            summary: 'Funding stress follows if the inflation shock broadens into sovereign repricing.',
+            evidenceRefs: ['E2'],
+          },
+        ],
+      }],
+    };
+  }
+
+  it('keeps impact-expansion cache hashes stable when source situation ids churn', () => {
+    const left = makeImpactCandidatePacket('state-1', 'Strait of Hormuz maritime disruption state', {
+      sourceSituationIds: ['sit-a'],
+    });
+    const right = makeImpactCandidatePacket('state-1', 'Strait of Hormuz maritime disruption state', {
+      sourceSituationIds: ['sit-b', 'sit-c'],
+    });
+
+    assert.equal(
+      buildImpactExpansionCandidateHash([left]),
+      buildImpactExpansionCandidateHash([right]),
+    );
+  });
+
+  it('validates exact evidence refs and maps only strong hypotheses', () => {
+    const bundle = makeImpactExpansionBundle();
+    bundle.extractedCandidates[0].directHypotheses.push({
+      variableKey: 'route_disruption',
+      channel: 'shipping_cost_shock',
+      targetBucket: 'freight',
+      region: 'Middle East',
+      macroRegion: 'EMEA',
+      countries: ['Qatar'],
+      assetsOrSectors: ['Shipping'],
+      commodity: 'lng',
+      dependsOnKey: '',
+      strength: 0.88,
+      confidence: 0.84,
+      analogTag: 'energy_corridor_blockage',
+      summary: 'This should fail because the evidence key is invalid.',
+      evidenceRefs: ['E9'],
+    });
+
+    const validation = validateImpactHypotheses(bundle);
+    const direct = validation.hypotheses.find((item) => item.order === 'direct' && item.variableKey === 'lng_export_stress');
+    const secondOrder = validation.hypotheses.find((item) => item.order === 'second_order' && item.variableKey === 'inflation_pass_through');
+    const thirdOrder = validation.hypotheses.find((item) => item.order === 'third_order' && item.variableKey === 'sovereign_funding_stress');
+
+    assert.equal(validation.mapped.length, 2);
+    assert.equal(validation.rejectionReasonCounts.no_valid_evidence_refs, 1);
+    assert.equal(direct.validationStatus, 'mapped');
+    assert.equal(secondOrder.validationStatus, 'mapped');
+    assert.equal(thirdOrder.validationStatus, 'rejected');
+    assert.equal(thirdOrder.rejectionReason, '');
+  });
+
+  it('accepts valid risk-off channels for sovereign-risk impact hypotheses', () => {
+    const bundle = makeImpactExpansionBundle('state-risk', 'Global risk-off repricing state', {
+      marketBucketIds: ['sovereign_risk', 'fx_stress'],
+      transmissionChannels: ['risk_off_rotation', 'volatility_shock'],
+      topSignalTypes: ['risk_off_rotation'],
+      criticalSignalTypes: ['risk_off_rotation'],
+      commodityKey: '',
+      routeFacilityKey: '',
+      marketContext: {
+        topBucketId: 'sovereign_risk',
+        topBucketLabel: 'Sovereign Risk',
+        topBucketPressure: 0.8,
+        confirmationScore: 0.74,
+        contradictionScore: 0.06,
+        topChannel: 'risk_off_rotation',
+        topTransmissionStrength: 0.72,
+        topTransmissionConfidence: 0.68,
+        transmissionEdgeCount: 3,
+        criticalSignalLift: 0.55,
+        criticalSignalTypes: ['risk_off_rotation'],
+        linkedBucketIds: ['sovereign_risk', 'fx_stress'],
+        consequenceSummary: 'Risk-off rotation is transmitting into sovereign repricing.',
+      },
+    });
+    bundle.extractedCandidateCount = 1;
+    bundle.extractedHypothesisCount = 2;
+    bundle.extractedCandidates = [{
+      candidateIndex: 0,
+      candidateStateId: 'state-risk',
+      directHypotheses: [
+        {
+          variableKey: 'route_disruption',
+          channel: 'shipping_cost_shock',
+          targetBucket: 'freight',
+          region: 'Global',
+          macroRegion: 'GLOBAL',
+          countries: ['United States'],
+          assetsOrSectors: ['Shipping'],
+          commodity: '',
+          dependsOnKey: '',
+          strength: 0.93,
+          confidence: 0.9,
+          analogTag: 'shipping_insurance_spike',
+          summary: 'Shipping stress is spilling out of the primary route network.',
+          evidenceRefs: ['E1', 'E2'],
+        },
+      ],
+      secondOrderHypotheses: [
+        {
+          variableKey: 'risk_off_rotation',
+          channel: 'risk_off_rotation',
+          targetBucket: 'sovereign_risk',
+          region: 'Global',
+          macroRegion: 'GLOBAL',
+          countries: ['United States'],
+          assetsOrSectors: ['Sovereign bonds'],
+          commodity: '',
+          dependsOnKey: 'route_disruption',
+          strength: 0.93,
+          confidence: 0.9,
+          analogTag: 'risk_off_flight_to_safety',
+          summary: 'Risk-off rotation is spilling into sovereign repricing.',
+          evidenceRefs: ['E1', 'E2'],
+        },
+      ],
+      thirdOrderHypotheses: [],
+    }];
+
+    const validation = validateImpactHypotheses(bundle);
+    const riskOff = validation.hypotheses.find((item) => item.variableKey === 'risk_off_rotation');
+
+    assert.equal(validation.mapped.length, 2);
+    assert.equal(riskOff.validationStatus, 'mapped');
+    assert.equal(riskOff.rejectionReason, '');
+  });
+
+  it('requires higher-order hypotheses to depend on lower-order items that survived validation', () => {
+    const bundle = makeImpactExpansionBundle();
+    bundle.extractedCandidates = [{
+      candidateIndex: 0,
+      candidateStateId: bundle.candidatePackets[0].candidateStateId,
+      directHypotheses: [
+        {
+          variableKey: 'lng_export_stress',
+          channel: 'gas_supply_stress',
+          targetBucket: 'energy',
+          region: 'Middle East',
+          macroRegion: 'EMEA',
+          countries: ['Qatar'],
+          assetsOrSectors: ['LNG exports'],
+          commodity: 'lng',
+          dependsOnKey: '',
+          strength: 0.95,
+          confidence: 0.92,
+          analogTag: 'lng_export_disruption',
+          summary: 'This direct hypothesis should fail evidence validation.',
+          evidenceRefs: ['E9'],
+        },
+      ],
+      secondOrderHypotheses: [
+        {
+          variableKey: 'inflation_pass_through',
+          channel: 'inflation_impulse',
+          targetBucket: 'rates_inflation',
+          region: 'Middle East',
+          macroRegion: 'EMEA',
+          countries: ['Qatar'],
+          assetsOrSectors: ['Importers'],
+          commodity: 'lng',
+          dependsOnKey: 'lng_export_stress',
+          strength: 0.92,
+          confidence: 0.9,
+          analogTag: 'inflation_pass_through',
+          summary: 'This should fail because its parent did not survive validation.',
+          evidenceRefs: ['E1', 'E2'],
+        },
+      ],
+      thirdOrderHypotheses: [],
+    }];
+    bundle.extractedHypothesisCount = 2;
+
+    const validation = validateImpactHypotheses(bundle);
+    const direct = validation.hypotheses.find((item) => item.order === 'direct');
+    const secondOrder = validation.hypotheses.find((item) => item.order === 'second_order');
+
+    assert.equal(direct.rejectionReason, 'no_valid_evidence_refs');
+    assert.equal(secondOrder.rejectionReason, 'missing_dependency');
+    assert.equal(secondOrder.validationStatus, 'rejected');
+  });
+
+  it('threads mapped expansion signals into simulation rounds without mutating observed world signals', () => {
+    const prediction = makePrediction('supply_chain', 'Red Sea', 'Shipping disruption: Strait of Hormuz', 0.68, 0.6, '7d', [
+      { type: 'shipping_cost_shock', value: 'Shipping costs are rising around Strait of Hormuz rerouting.', weight: 0.5 },
+      { type: 'energy_supply_shock', value: 'Energy transit pressure is building around Qatar LNG flows.', weight: 0.32 },
+    ]);
+    prediction.newsContext = ['Tanker rerouting is amplifying LNG and freight pressure around the Gulf.'];
+    buildForecastCase(prediction);
+    populateFallbackNarratives([prediction]);
+
+    const baseState = buildForecastRunWorldState({
+      generatedAt: Date.parse('2026-03-23T10:00:00Z'),
+      predictions: [prediction],
+    });
+    const stateUnit = baseState.stateUnits[0];
+    const bundle = makeImpactExpansionBundle(stateUnit.id, stateUnit.label, {
+      dominantRegion: stateUnit.dominantRegion || stateUnit.regions?.[0] || 'Red Sea',
+      macroRegions: stateUnit.macroRegions || ['EMEA'],
+      countries: stateUnit.regions || ['Red Sea'],
+      marketBucketIds: stateUnit.marketBucketIds || ['energy', 'freight', 'rates_inflation'],
+      transmissionChannels: stateUnit.transmissionChannels || ['shipping_cost_shock', 'gas_supply_stress'],
+      topSignalTypes: stateUnit.signalTypes || ['shipping_cost_shock'],
+    });
+
+    const worldState = buildForecastRunWorldState({
+      generatedAt: Date.parse('2026-03-23T10:05:00Z'),
+      predictions: [prediction],
+      inputs: { impactExpansionBundle: bundle },
+      situationClusters: baseState.situationClusters,
+      situationFamilies: baseState.situationFamilies,
+      stateUnits: baseState.stateUnits,
+    });
+
+    assert.equal(worldState.worldSignals.signals.length, baseState.worldSignals.signals.length);
+    assert.equal(worldState.impactExpansion.mappedSignalCount, 2);
+    assert.ok(worldState.impactExpansion.expandedWorldSignalCount > worldState.impactExpansion.observedWorldSignalCount);
+    assert.equal(worldState.simulationState.expandedSignalUsageByRound.round_1.mappedCount, 1);
+    assert.equal(worldState.simulationState.expandedSignalUsageByRound.round_2.mappedCount, 2);
+    assert.equal(worldState.simulationState.expandedSignalUsageByRound.round_3.mappedCount, 2);
+  });
+});
+
 describe('critical news signal extraction', () => {
   it('extracts urgent route, LNG, sanctions, and thermal signals from structured news and intelligence', () => {
     const clusterItems = extractNewsClusterItems(
@@ -2680,6 +3870,41 @@ describe('critical news signal extraction', () => {
     assert.ok(candidates.every((item) => item.isUrgent));
     assert.ok(candidates.every((item) => item.urgentScore >= 0.58));
     assert.ok(candidates.every((item) => item.triageTags.length > 0));
+  });
+
+  it('excludes generic tragedy stories from urgent critical-news extraction when they lack transmission relevance', () => {
+    const candidates = selectUrgentCriticalNewsCandidates({
+      newsInsights: {
+        generatedAt: '2026-03-22T12:00:00.000Z',
+        topStories: [
+          {
+            primaryTitle: 'Airstrike hits hospital in Sudan as casualties rise',
+            primaryLink: 'https://example.com/hospital-strike',
+            threatLevel: 'critical',
+            sourceCount: 5,
+            isAlert: true,
+          },
+          {
+            primaryTitle: 'Massive house fire spreads through Minnesota neighborhood overnight',
+            primaryLink: 'https://example.com/house-fire',
+            threatLevel: 'critical',
+            sourceCount: 4,
+            isAlert: true,
+          },
+          {
+            primaryTitle: 'Iran threatens closure of the Strait of Hormuz after tanker strike',
+            primaryLink: 'https://example.com/hormuz',
+            threatLevel: 'critical',
+            sourceCount: 6,
+            isAlert: true,
+          },
+        ],
+      },
+    });
+
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].title, 'Iran threatens closure of the Strait of Hormuz after tanker strike');
+    assert.ok(candidates[0].triageTags.includes('route'));
   });
 
   it('maps validated structured critical-event frames into deterministic world signals', () => {

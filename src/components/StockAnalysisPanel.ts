@@ -1,4 +1,5 @@
 import { Panel } from './Panel';
+import { t } from '@/services/i18n';
 import type { StockAnalysisResult } from '@/services/stock-analysis';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 import type { StockAnalysisHistory } from '@/services/stock-analysis-history';
@@ -28,7 +29,7 @@ function list(items: string[], tone: string): string {
 
 export class StockAnalysisPanel extends Panel {
   constructor() {
-    super({ id: 'stock-analysis', title: 'Premium Stock Analysis' });
+    super({ id: 'stock-analysis', title: 'Premium Stock Analysis', infoTooltip: t('components.stockAnalysis.infoTooltip') });
   }
 
   public renderAnalyses(items: StockAnalysisResult[], historyBySymbol: StockAnalysisHistory = {}, source: 'live' | 'cached' = 'live'): void {
@@ -70,8 +71,8 @@ export class StockAnalysisPanel extends Panel {
           <div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <strong style="font-size:16px;letter-spacing:-0.02em">${escapeHtml(item.name || item.symbol)}</strong>
-              <span style="font-size:11px;color:var(--text-dim);font-family:monospace;text-transform:uppercase">${escapeHtml(item.display || item.symbol)}</span>
-              <span style="font-size:11px;padding:3px 6px;border:1px solid ${tone};color:${tone};font-family:monospace;text-transform:uppercase;letter-spacing:0.08em">${escapeHtml(item.signal)}</span>
+              <span style="font-size:11px;color:var(--text-dim);font-family:var(--font-mono);text-transform:uppercase">${escapeHtml(item.display || item.symbol)}</span>
+              <span style="font-size:11px;padding:3px 6px;border:1px solid ${tone};color:${tone};font-family:var(--font-mono);text-transform:uppercase;letter-spacing:0.08em">${escapeHtml(item.signal)}</span>
             </div>
             <div style="margin-top:6px;font-size:12px;color:var(--text-dim);line-height:1.5">${escapeHtml(item.summary)}</div>
           </div>
