@@ -89,6 +89,7 @@ async function fetchAvBulkForEtfs(tickers, apiKey) {
     });
     if (!resp.ok) { console.warn(`  [AV] ETF bulk quotes HTTP ${resp.status}`); return results; }
     const json = await resp.json();
+    if (json.Information) { console.warn(`  [AV] Rate limit hit: ${String(json.Information).slice(0, 100)}`); return results; }
     if (!Array.isArray(json.data)) return results;
     for (const item of json.data) {
       const price = parseFloat(item.price);
@@ -129,10 +130,12 @@ async function fetchEtfFlows() {
   }
 
   // --- Fallback: Yahoo (for any ETFs not covered by AV) ---
+  let yahooIdx = 0;
   for (let i = 0; i < ETF_LIST.length; i++) {
     const { ticker, issuer } = ETF_LIST[i];
     if (covered.has(ticker)) continue;
-    if (i > 0) await sleep(YAHOO_DELAY_MS);
+    if (yahooIdx > 0) await sleep(YAHOO_DELAY_MS);
+    yahooIdx++;
 
     try {
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=5d&interval=1d`;

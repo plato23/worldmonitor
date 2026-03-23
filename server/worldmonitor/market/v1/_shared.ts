@@ -98,7 +98,9 @@ export async function fetchAlphaVantageQuotesBatch(
 ): Promise<Map<string, { price: number; change: number; sparkline: number[] }>> {
   const results = new Map<string, { price: number; change: number; sparkline: number[] }>();
   const BATCH = 100;
+  const AV_BATCH_DELAY_MS = 500;
   for (let i = 0; i < symbols.length; i += BATCH) {
+    if (i > 0) await new Promise<void>(r => setTimeout(r, AV_BATCH_DELAY_MS));
     const chunk = symbols.slice(i, i + BATCH);
     const url = `https://www.alphavantage.co/query?function=REALTIME_BULK_QUOTES&symbol=${encodeURIComponent(chunk.join(','))}&apikey=${encodeURIComponent(apiKey)}`;
     try {
@@ -110,12 +112,16 @@ export async function fetchAlphaVantageQuotesBatch(
         console.warn(`[AV] Bulk quotes HTTP ${resp.status}`);
         continue;
       }
-      const json = await resp.json() as { data?: Array<{ symbol: string; price: string; 'previous close': string; 'change percent': string }> };
+      const json = await resp.json() as { data?: Array<{ symbol: string; price: string; 'previous close': string; 'change percent': string }>; Information?: string };
+      if (json.Information) {
+        console.warn(`[AV] Rate limit hit: ${json.Information.slice(0, 100)}`);
+        break;
+      }
       if (!Array.isArray(json.data)) continue;
       for (const item of json.data) {
         const price = parseFloat(item.price);
         const prevClose = parseFloat(item['previous close']);
-        const changePct = prevClose && Number.isFinite(prevClose)
+        const changePct = Number.isFinite(prevClose) && prevClose > 0
           ? ((price - prevClose) / prevClose) * 100
           : parseFloat((item['change percent'] || '0').replace('%', ''));
         if (Number.isFinite(price) && price > 0) {
@@ -145,7 +151,11 @@ export async function fetchAlphaVantagePhysicalCommodity(
       console.warn(`[AV] ${fn} HTTP ${resp.status}`);
       return null;
     }
-    const json = await resp.json() as { data?: Array<{ date: string; value: string }> };
+    const json = await resp.json() as { data?: Array<{ date: string; value: string }>; Information?: string };
+    if (json.Information) {
+      console.warn(`[AV] Rate limit hit: ${json.Information.slice(0, 100)}`);
+      return null;
+    }
     const data = json.data;
     if (!Array.isArray(data) || data.length < 2) return null;
     const latest = parseFloat(data[0]!.value);

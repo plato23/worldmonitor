@@ -54,6 +54,7 @@ async function fetchAvPhysicalCommodity(yahooSymbol, apiKey) {
     });
     if (!resp.ok) { console.warn(`  [AV] ${fn} HTTP ${resp.status}`); return null; }
     const json = await resp.json();
+    if (json.Information) { console.warn(`  [AV] Rate limit hit: ${String(json.Information).slice(0, 100)}`); return null; }
     const data = json.data;
     if (!Array.isArray(data) || data.length < 2) return null;
     const latest = parseFloat(data[0].value);
@@ -79,6 +80,7 @@ async function fetchAvBulkQuotes(symbols, apiKey) {
     });
     if (!resp.ok) { console.warn(`  [AV] Bulk quotes HTTP ${resp.status}`); return results; }
     const json = await resp.json();
+    if (json.Information) { console.warn(`  [AV] Rate limit hit: ${String(json.Information).slice(0, 100)}`); return results; }
     if (!Array.isArray(json.data)) return results;
     for (const item of json.data) {
       const price = parseFloat(item.price);
@@ -126,10 +128,12 @@ async function fetchCommodityQuotes() {
   const covered = new Set(quotes.map(q => q.symbol));
 
   // --- Fallback: Yahoo (for remaining symbols: futures not covered by AV, ^VIX, Indian markets) ---
+  let yahooIdx = 0;
   for (let i = 0; i < COMMODITY_SYMBOLS.length; i++) {
     const symbol = COMMODITY_SYMBOLS[i];
     if (covered.has(symbol)) continue;
-    if (i > 0) await sleep(YAHOO_DELAY_MS);
+    if (yahooIdx > 0) await sleep(YAHOO_DELAY_MS);
+    yahooIdx++;
 
     try {
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;

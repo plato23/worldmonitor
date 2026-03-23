@@ -68,7 +68,9 @@ async function fetchYahooQuote(symbol) {
 async function fetchAlphaVantageQuotesBatch(symbols, apiKey) {
   const results = new Map();
   const BATCH = 100;
+  const AV_BATCH_DELAY_MS = 500;
   for (let i = 0; i < symbols.length; i += BATCH) {
+    if (i > 0) await sleep(AV_BATCH_DELAY_MS);
     const chunk = symbols.slice(i, i + BATCH);
     const url = `https://www.alphavantage.co/query?function=REALTIME_BULK_QUOTES&symbol=${encodeURIComponent(chunk.join(','))}&apikey=${encodeURIComponent(apiKey)}`;
     try {
@@ -78,6 +80,7 @@ async function fetchAlphaVantageQuotesBatch(symbols, apiKey) {
       });
       if (!resp.ok) { console.warn(`  [AV] Bulk quotes HTTP ${resp.status}`); continue; }
       const json = await resp.json();
+      if (json.Information) { console.warn(`  [AV] Rate limit hit: ${String(json.Information).slice(0, 100)}`); break; }
       if (!Array.isArray(json.data)) { console.warn('  [AV] Unexpected response:', JSON.stringify(json).slice(0, 200)); continue; }
       for (const item of json.data) {
         const price = parseFloat(item.price);
