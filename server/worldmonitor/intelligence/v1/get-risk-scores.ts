@@ -291,7 +291,7 @@ async function fetchAuxiliarySources(): Promise<AuxiliarySources> {
     : [];
   const newsTopStories = rawStories.map((s: any) => ({
     countryCode: typeof s.countryCode === 'string' ? s.countryCode : null,
-    threatLevel: typeof s.threatLevel === 'string' ? s.threatLevel.toLowerCase() : 'moderate',
+    threatLevel: typeof s.threatLevel === 'string' ? s.threatLevel.toLowerCase() : 'low',
     primaryTitle: typeof s.primaryTitle === 'string' ? s.primaryTitle : '',
   }));
 
@@ -431,7 +431,7 @@ export function computeCIIScores(
 
   // --- News insights threat scoring ---
   const THREAT_WEIGHT: Record<string, number> = {
-    critical: 4, high: 2, medium: 1, elevated: 1, low: 0.5, info: 0,
+    critical: 4, high: 2, medium: 1, elevated: 1, moderate: 0.5, low: 0.5, info: 0,
   };
   for (const story of aux.newsTopStories) {
     const weight = THREAT_WEIGHT[story.threatLevel] ?? 0;
