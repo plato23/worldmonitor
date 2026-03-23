@@ -54,7 +54,7 @@ import { DataLoaderManager } from '@/app/data-loader';
 import { EventHandlerManager } from '@/app/event-handlers';
 import { resolveUserRegion, resolvePreciseUserCoordinates, type PreciseCoordinates } from '@/utils/user-location';
 import { showProBanner } from '@/components/ProBanner';
-import { initAuthState } from '@/services/auth-state';
+import { initAuthState, subscribeAuthState } from '@/services/auth-state';
 import {
   CorrelationEngine,
   militaryAdapter,
@@ -84,6 +84,7 @@ export class App {
 
   private modules: { destroy(): void }[] = [];
   private unsubAiFlow: (() => void) | null = null;
+  private unsubFreeTier: (() => void) | null = null;
   private visiblePanelPrimed = new Set<string>();
   private visiblePanelPrimeRaf: number | null = null;
   private bootstrapHydrationState: BootstrapHydrationState = getBootstrapHydrationState();
@@ -515,31 +516,6 @@ export class App {
       }
     }
 
-    // Enforce free-tier panel limit on every launch (handles legacy/downgraded users).
-    if (!isProUser()) {
-      // cw-* (custom widget) panels are not loaded for free users — disable them so they
-      // don't silently consume quota slots that count against visible standard panels.
-      let cwDisabled = false;
-      for (const key of Object.keys(panelSettings)) {
-        if (key.startsWith('cw-') && panelSettings[key]?.enabled) {
-          panelSettings[key] = { ...panelSettings[key]!, enabled: false };
-          cwDisabled = true;
-        }
-      }
-      const enabledKeys = Object.entries(panelSettings)
-        .filter(([k, v]) => v.enabled && !k.startsWith('cw-'))
-        .sort(([ka, a], [kb, b]) => (a.priority ?? 99) - (b.priority ?? 99) || ka.localeCompare(kb))
-        .map(([k]) => k);
-      const needsTrim = enabledKeys.length > FREE_MAX_PANELS;
-      if (needsTrim) {
-        for (const key of enabledKeys.slice(FREE_MAX_PANELS)) {
-          panelSettings[key] = { ...panelSettings[key]!, enabled: false };
-        }
-        console.log(`[App] Free tier: trimmed ${enabledKeys.length - FREE_MAX_PANELS} panel(s) to enforce ${FREE_MAX_PANELS}-panel limit`);
-      }
-      if (cwDisabled || needsTrim) saveToStorage(STORAGE_KEYS.panels, panelSettings);
-    }
-
     const initialUrlState: ParsedMapUrlState | null = parseMapUrlState(window.location.search, mapLayers);
     if (initialUrlState.layers) {
       mapLayers = sanitizeLayersForVariant(initialUrlState.layers, currentVariant as MapVariant);
@@ -574,26 +550,6 @@ export class App {
     }
 
     const disabledSources = new Set(loadFromStorage<string[]>(STORAGE_KEYS.disabledFeeds, []));
-
-    // Enforce free-tier source limit on every launch (handles legacy/downgraded users).
-    if (!isProUser()) {
-      const allSourceNames = (() => {
-        const s = new Set<string>();
-        Object.values(FEEDS).forEach(feeds => feeds?.forEach(f => s.add(f.name)));
-        INTEL_SOURCES.forEach(f => s.add(f.name));
-        return Array.from(s).sort((a, b) => a.localeCompare(b));
-      })();
-      const currentlyEnabled = allSourceNames.filter(n => !disabledSources.has(n));
-      const enabledCount = currentlyEnabled.length;
-      if (enabledCount > FREE_MAX_SOURCES) {
-        const toDisable = enabledCount - FREE_MAX_SOURCES;
-        for (const name of currentlyEnabled.slice(FREE_MAX_SOURCES)) {
-          disabledSources.add(name);
-        }
-        saveToStorage(STORAGE_KEYS.disabledFeeds, Array.from(disabledSources));
-        console.log(`[App] Free tier: disabled ${toDisable} source(s) to enforce ${FREE_MAX_SOURCES}-source limit`);
-      }
-    }
 
     // Build shared state object
     this.state = {
@@ -766,6 +722,8 @@ export class App {
     // Verify OAuth OTT and hydrate auth session BEFORE any UI subscribes to auth state
     await initAuthState();
     initAuthAnalytics();
+    this.enforceFreeTierLimits();
+    this.unsubFreeTier = subscribeAuthState(() => { this.enforceFreeTierLimits(); });
 
 
     const geoCoordsPromise: Promise<PreciseCoordinates | null> =
@@ -916,6 +874,56 @@ export class App {
     this.eventHandlers.setupPanelViewTracking();
   }
 
+  /**
+   * Enforce free-tier panel and source limits.
+   * Reads current values from storage, trims if necessary, and saves back.
+   * Safe to call multiple times (idempotent) — e.g. on auth state changes.
+   */
+  private enforceFreeTierLimits(): void {
+    if (isProUser()) return;
+
+    // --- Panel limit ---
+    const panelSettings = loadFromStorage<Record<string, PanelConfig>>(STORAGE_KEYS.panels, {});
+    let cwDisabled = false;
+    for (const key of Object.keys(panelSettings)) {
+      if (key.startsWith('cw-') && panelSettings[key]?.enabled) {
+        panelSettings[key] = { ...panelSettings[key]!, enabled: false };
+        cwDisabled = true;
+      }
+    }
+    const enabledKeys = Object.entries(panelSettings)
+      .filter(([k, v]) => v.enabled && !k.startsWith('cw-'))
+      .sort(([ka, a], [kb, b]) => (a.priority ?? 99) - (b.priority ?? 99) || ka.localeCompare(kb))
+      .map(([k]) => k);
+    const needsTrim = enabledKeys.length > FREE_MAX_PANELS;
+    if (needsTrim) {
+      for (const key of enabledKeys.slice(FREE_MAX_PANELS)) {
+        panelSettings[key] = { ...panelSettings[key]!, enabled: false };
+      }
+      console.log(`[App] Free tier: trimmed ${enabledKeys.length - FREE_MAX_PANELS} panel(s) to enforce ${FREE_MAX_PANELS}-panel limit`);
+    }
+    if (cwDisabled || needsTrim) saveToStorage(STORAGE_KEYS.panels, panelSettings);
+
+    // --- Source limit ---
+    const disabledSources = new Set(loadFromStorage<string[]>(STORAGE_KEYS.disabledFeeds, []));
+    const allSourceNames = (() => {
+      const s = new Set<string>();
+      Object.values(FEEDS).forEach(feeds => feeds?.forEach(f => s.add(f.name)));
+      INTEL_SOURCES.forEach(f => s.add(f.name));
+      return Array.from(s).sort((a, b) => a.localeCompare(b));
+    })();
+    const currentlyEnabled = allSourceNames.filter(n => !disabledSources.has(n));
+    const enabledCount = currentlyEnabled.length;
+    if (enabledCount > FREE_MAX_SOURCES) {
+      const toDisable = enabledCount - FREE_MAX_SOURCES;
+      for (const name of currentlyEnabled.slice(FREE_MAX_SOURCES)) {
+        disabledSources.add(name);
+      }
+      saveToStorage(STORAGE_KEYS.disabledFeeds, Array.from(disabledSources));
+      console.log(`[App] Free tier: disabled ${toDisable} source(s) to enforce ${FREE_MAX_SOURCES}-source limit`);
+    }
+  }
+
   public destroy(): void {
     this.state.isDestroyed = true;
     window.removeEventListener('scroll', this.handleViewportPrime);
@@ -934,6 +942,7 @@ export class App {
 
     // Clean up subscriptions, map, AIS, and breaking news
     this.unsubAiFlow?.();
+    this.unsubFreeTier?.();
     this.state.breakingBanner?.destroy();
     destroyBreakingNewsAlerts();
     this.cachedModeBannerEl?.remove();

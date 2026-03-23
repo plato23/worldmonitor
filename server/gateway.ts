@@ -218,43 +218,40 @@ export function createDomainGateway(
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
-    // API key validation (origin-aware)
-    // Trusted browser origins bypass forceKey for premium paths — the client-side
-    // isProUser() gate controls access from the web app. Bearer token validation
-    // below handles server-side entitlement checks when a token IS present.
-    const origin = request.headers.get('Origin') || '';
-    const isTrustedOrigin = Boolean(origin) && !isDisallowedOrigin(request);
+    // API key validation
     const keyCheck = validateApiKey(request, {
-      forceKey: PREMIUM_RPC_PATHS.has(pathname) && !isTrustedOrigin,
+      forceKey: PREMIUM_RPC_PATHS.has(pathname),
     });
     if (keyCheck.required && !keyCheck.valid) {
-      return new Response(JSON.stringify({ error: keyCheck.error }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      });
-    }
-
-    // Bearer token enforcement for premium endpoints.
-    // When an Authorization header IS present on a premium path, validate the JWT
-    // and check the tier. This runs after the API-key block so it applies to both
-    // trusted-origin (no forceKey) and external (forceKey) paths.
-    if (PREMIUM_RPC_PATHS.has(pathname)) {
-      const authHeader = request.headers.get('Authorization');
-      if (authHeader?.startsWith('Bearer ')) {
-        const { validateBearerToken } = await import('./auth-session');
-        const session = await validateBearerToken(authHeader.slice(7));
-        if (!session.valid) {
-          return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
+      if (PREMIUM_RPC_PATHS.has(pathname)) {
+        const authHeader = request.headers.get('Authorization');
+        if (authHeader?.startsWith('Bearer ')) {
+          const { validateBearerToken } = await import('./auth-session');
+          const session = await validateBearerToken(authHeader.slice(7));
+          if (!session.valid) {
+            return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            });
+          }
+          if (session.role !== 'pro') {
+            return new Response(JSON.stringify({ error: 'Pro subscription required' }), {
+              status: 403,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            });
+          }
+          // Valid pro session — fall through to route handling
+        } else {
+          return new Response(JSON.stringify({ error: keyCheck.error }), {
             status: 401,
             headers: { 'Content-Type': 'application/json', ...corsHeaders },
           });
         }
-        if (session.role !== 'pro') {
-          return new Response(JSON.stringify({ error: 'Pro subscription required' }), {
-            status: 403,
-            headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          });
-        }
+      } else {
+        return new Response(JSON.stringify({ error: keyCheck.error }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
+        });
       }
     }
 
