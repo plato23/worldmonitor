@@ -30,10 +30,11 @@ export type {
   RetailerFreshnessInfo,
 };
 
-export const DEFAULT_MARKET = 'ae';
+export const DEFAULT_MARKET = 'all';
 export const DEFAULT_BASKET = 'essentials-ae';
 
 export const MARKETS: Array<{ code: string; label: string }> = [
+  { code: 'all', label: '🌍 All' },
   { code: 'ae', label: '🇦🇪 UAE' },
   { code: 'au', label: '🇦🇺 AU' },
   { code: 'br', label: '🇧🇷 BR' },
@@ -44,6 +45,8 @@ export const MARKETS: Array<{ code: string; label: string }> = [
   { code: 'sg', label: '🇸🇬 SG' },
   { code: 'us', label: '🇺🇸 US' },
 ];
+
+export const SINGLE_MARKETS = MARKETS.filter((m) => m.code !== 'all');
 
 const client = new ConsumerPricesServiceClient(getRpcBaseUrl(), {
   fetch: (...args) => globalThis.fetch(...args),
@@ -253,4 +256,10 @@ export async function fetchConsumerPriceFreshness(
   } catch {
     return emptyFreshness;
   }
+}
+
+export async function fetchAllMarketsOverview(): Promise<GetConsumerPriceOverviewResponse[]> {
+  return Promise.all(
+    SINGLE_MARKETS.map((m) => fetchConsumerPriceOverview(m.code, `essentials-${m.code}`)),
+  );
 }

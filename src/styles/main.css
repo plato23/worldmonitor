@@ -21024,6 +21024,39 @@ body.has-breaking-alert .panels-grid {
   border-color: var(--text-dim);
 }
 
+.cp-global-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.cp-global-table th {
+  text-align: left;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.cp-global-row {
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.05));
+}
+.cp-global-row:hover { background: var(--overlay-subtle); }
+.cp-global-row td { padding: 6px 6px; vertical-align: middle; }
+.cp-global-flag { font-size: 0.8rem; white-space: nowrap; }
+.cp-global-index { color: var(--text-primary, #e0e0e0); font-variant-numeric: tabular-nums; }
+.cp-global-wow { white-space: nowrap; }
+.cp-global-spread { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cp-global-fresh { font-size: 0.72rem; }
+.cp-global-pending { color: var(--text-dim); font-size: 0.72rem; font-style: italic; }
+.cp-global-hint {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
 .cp-range-bar {
   display: flex;
   gap: 4px;

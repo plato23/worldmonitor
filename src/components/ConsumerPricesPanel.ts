@@ -8,7 +8,9 @@ import {
   fetchConsumerPriceMovers,
   fetchRetailerPriceSpreads,
   fetchConsumerPriceFreshness,
+  fetchAllMarketsOverview,
   MARKETS,
+  SINGLE_MARKETS,
   DEFAULT_MARKET,
   DEFAULT_BASKET,
   type GetConsumerPriceOverviewResponse,
@@ -93,6 +95,7 @@ export class ConsumerPricesPanel extends Panel {
   private movers: ListConsumerPriceMoversResponse | null = null;
   private spread: ListRetailerPriceSpreadsResponse | null = null;
   private freshness: GetConsumerPriceFreshnessResponse | null = null;
+  private allMarkets: GetConsumerPriceOverviewResponse[] = [];
   private settings: PanelSettings = loadSettings();
   private loading = false; // tracks in-flight fetch to avoid duplicates
 
@@ -114,7 +117,8 @@ export class ConsumerPricesPanel extends Panel {
     if (marketBtn?.dataset.market) {
       const code = marketBtn.dataset.market;
       this.settings.market = code;
-      this.settings.basket = `essentials-${code}`;
+      this.settings.basket = code === 'all' ? DEFAULT_BASKET : `essentials-${code}`;
+      this.settings.tab = 'overview';
       saveSettings(this.settings);
       void this.fetchData();
       return;
@@ -159,6 +163,15 @@ export class ConsumerPricesPanel extends Panel {
     this.showLoading();
 
     const { market, basket, range } = this.settings;
+
+    if (market === 'all') {
+      const results = await fetchAllMarketsOverview();
+      if (!this.element?.isConnected) { this.loading = false; return; }
+      this.allMarkets = results;
+      this.loading = false;
+      this.render();
+      return;
+    }
 
     const [overview, categories, movers, spread, freshness] = await Promise.all([
       fetchConsumerPriceOverview(market, basket),
@@ -216,6 +229,17 @@ export class ConsumerPricesPanel extends Panel {
       </div>
     `;
 
+    // All-markets global view — skip per-market tabs
+    if (market === 'all') {
+      this.setContent(`
+        <div class="consumer-prices-panel">
+          ${marketBarHtml}
+          <div class="cp-body">${this.renderGlobalOverview()}</div>
+        </div>
+      `);
+      return;
+    }
+
     const noData = this.overview?.upstreamUnavailable;
 
     // When seed hasn't run yet, show a single full-panel placeholder instead
@@ -263,6 +287,44 @@ export class ConsumerPricesPanel extends Panel {
         <div class="cp-body">${bodyHtml}</div>
       </div>
     `);
+  }
+
+  private renderGlobalOverview(): string {
+    if (this.allMarkets.length === 0) {
+      return `<div class="cp-empty-state">Loading global data…</div>`;
+    }
+    const rows = SINGLE_MARKETS.map((m) => {
+      const d = this.allMarkets.find((r) => r.marketCode === m.code);
+      const hasData = d && d.asOf && d.asOf !== '0' && !d.upstreamUnavailable;
+      if (!hasData) {
+        return `
+          <tr class="cp-global-row" data-market="${m.code}">
+            <td class="cp-global-flag">${m.label}</td>
+            <td colspan="4" class="cp-global-pending">Pending data</td>
+          </tr>`;
+      }
+      const wowBadge = pctBadge(d.wowPct, true);
+      const freshCls = freshnessClass(d.freshnessLagMin > 0 ? d.freshnessLagMin : null);
+      return `
+        <tr class="cp-global-row" data-market="${m.code}">
+          <td class="cp-global-flag">${m.label}</td>
+          <td class="cp-global-index">${d.essentialsIndex > 0 ? d.essentialsIndex.toFixed(1) : '—'}</td>
+          <td class="cp-global-wow">${wowBadge}</td>
+          <td class="cp-global-spread">${d.retailerSpreadPct > 0 ? `${d.retailerSpreadPct.toFixed(1)}%` : '—'}</td>
+          <td class="cp-global-fresh ${freshCls}">${d.freshnessLagMin > 0 ? freshnessLabel(d.freshnessLagMin) : '—'}</td>
+        </tr>`;
+    }).join('');
+    return `
+      <table class="cp-global-table">
+        <thead>
+          <tr>
+            <th>Market</th><th>Index</th><th>WoW</th><th>Spread</th><th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="cp-global-hint">Tap a market row to drill in</div>
+    `;
   }
 
   private renderOverview(): string {
