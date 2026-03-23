@@ -7260,7 +7260,7 @@ function buildReportableInteractionLedger(interactionLedger = [], situationSimul
       blocked.push({ ...item, reason: 'no_structural_or_market_link' });
       continue;
     }
-    const genericConfidenceFloor = strictMode ? 0.72 : 0.72;
+    const genericConfidenceFloor = 0.72;
     const genericScoreFloor = strictMode ? 5.2 : 5;
     const crossTheaterConfidenceFloor = strictMode ? 0.78 : 0.72;
     const crossTheaterScoreFloor = strictMode ? 5.8 : 5.7;
@@ -13824,6 +13824,9 @@ export {
   extractImpactExpansionBundle,
   buildImpactPathsForCandidate,
   buildImpactExpansionBundleFromPaths,
+  computeDeepReportableQualityScore,
+  computeDeepMarketCoherenceScore,
+  computeDeepPathAcceptanceScore,
   evaluateDeepForecastPaths,
   validateImpactHypotheses,
   materializeImpactExpansion,

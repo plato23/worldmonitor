@@ -26,8 +26,12 @@ import {
   buildImpactExpansionCandidateHash,
   buildImpactPathsForCandidate,
   buildImpactExpansionBundleFromPaths,
+  computeDeepReportableQualityScore,
+  computeDeepMarketCoherenceScore,
+  computeDeepPathAcceptanceScore,
   selectDeepForecastCandidates,
   validateImpactHypotheses,
+  evaluateDeepForecastPaths,
 } from '../scripts/seed-forecasts.mjs';
 
 import {
@@ -3725,6 +3729,174 @@ describe('impact expansion layer', () => {
     assert.equal(artifacts.summary.deepForecast.status, 'completed');
     assert.equal(artifacts.summary.worldStateSummary.forecastDepth, 'deep');
     assert.equal(artifacts.summary.worldStateSummary.deepForecastStatus, 'completed');
+  });
+
+  it('computes deep reportable quality score from candidate-touching interactions and effects', () => {
+    const candidateStateId = 'state-1';
+    const reportableLedger = [
+      { sourceSituationId: candidateStateId, targetSituationId: 'state-2', confidence: 0.78, score: 5.6 },
+      { sourceSituationId: 'state-3', targetSituationId: candidateStateId, confidence: 0.82, score: 5.9 },
+    ];
+    reportableLedger.blocked = [
+      { sourceSituationId: candidateStateId, targetSituationId: 'state-4', confidence: 0.59, score: 4.8 },
+    ];
+    const pathWorldState = {
+      simulationState: {
+        interactionLedger: [
+          { sourceSituationId: candidateStateId, targetSituationId: 'state-2' },
+          { sourceSituationId: 'state-3', targetSituationId: candidateStateId },
+          { sourceSituationId: candidateStateId, targetSituationId: 'state-5' },
+          { sourceSituationId: 'state-6', targetSituationId: candidateStateId },
+        ],
+        reportableInteractionLedger: reportableLedger,
+      },
+      report: {
+        crossSituationEffects: [
+          { sourceSituationId: candidateStateId, targetSituationId: 'state-2', channel: 'shipping_cost_shock' },
+        ],
+      },
+    };
+
+    const score = computeDeepReportableQualityScore(pathWorldState, candidateStateId);
+
+    assert.equal(score, 0.651);
+  });
+
+  it('computes deep market coherence score from mapped hypotheses and admissibility', () => {
+    const candidatePacket = makeImpactCandidatePacket('state-1', 'Strait of Hormuz maritime disruption state');
+    const path = {
+      direct: {
+        validationScore: 0.9,
+        targetBucket: 'freight',
+        channel: 'shipping_cost_shock',
+      },
+      second: {
+        validationScore: 0.8,
+        targetBucket: 'energy',
+        channel: 'gas_supply_stress',
+      },
+      third: null,
+    };
+    const pathWorldState = {
+      simulationState: {
+        marketConsequences: {
+          items: [
+            { situationId: 'state-1', bucketId: 'freight', channel: 'shipping_cost_shock' },
+            { situationId: 'state-1', bucketId: 'energy', channel: 'gas_supply_stress' },
+          ],
+          blocked: [
+            { situationId: 'state-1', bucketId: 'rates_inflation', channel: 'inflation_impulse', reason: 'inadmissible_bucket_channel' },
+          ],
+        },
+      },
+    };
+
+    const score = computeDeepMarketCoherenceScore(pathWorldState, candidatePacket, path);
+
+    assert.equal(score, 0.823);
+  });
+
+  it('computes deep path acceptance score from path quality, market coherence, and contradiction', () => {
+    const candidatePacket = makeImpactCandidatePacket('state-1', 'Strait of Hormuz maritime disruption state', {
+      marketContext: {
+        ...makeImpactCandidatePacket().marketContext,
+        contradictionScore: 0.08,
+      },
+    });
+    const path = {
+      pathScore: 0.71,
+      direct: {
+        validationScore: 0.9,
+        targetBucket: 'freight',
+        channel: 'shipping_cost_shock',
+      },
+      second: {
+        validationScore: 0.8,
+        targetBucket: 'energy',
+        channel: 'gas_supply_stress',
+      },
+      third: null,
+    };
+    const reportableLedger = [
+      { sourceSituationId: 'state-1', targetSituationId: 'state-2', confidence: 0.78, score: 5.6 },
+      { sourceSituationId: 'state-3', targetSituationId: 'state-1', confidence: 0.82, score: 5.9 },
+    ];
+    reportableLedger.blocked = [
+      { sourceSituationId: 'state-1', targetSituationId: 'state-4', confidence: 0.59, score: 4.8 },
+    ];
+    const pathWorldState = {
+      simulationState: {
+        interactionLedger: [
+          { sourceSituationId: 'state-1', targetSituationId: 'state-2' },
+          { sourceSituationId: 'state-3', targetSituationId: 'state-1' },
+          { sourceSituationId: 'state-1', targetSituationId: 'state-5' },
+          { sourceSituationId: 'state-6', targetSituationId: 'state-1' },
+        ],
+        reportableInteractionLedger: reportableLedger,
+        marketConsequences: {
+          items: [
+            { situationId: 'state-1', bucketId: 'freight', channel: 'shipping_cost_shock' },
+            { situationId: 'state-1', bucketId: 'energy', channel: 'gas_supply_stress' },
+          ],
+          blocked: [
+            { situationId: 'state-1', bucketId: 'rates_inflation', channel: 'inflation_impulse', reason: 'inadmissible_bucket_channel' },
+          ],
+        },
+      },
+      report: {
+        crossSituationEffects: [
+          { sourceSituationId: 'state-1', targetSituationId: 'state-2', channel: 'shipping_cost_shock' },
+        ],
+      },
+    };
+
+    const scoring = computeDeepPathAcceptanceScore(candidatePacket, path, pathWorldState);
+
+    assert.equal(scoring.reportableQualityScore, 0.651);
+    assert.equal(scoring.marketCoherenceScore, 0.823);
+    assert.equal(scoring.contradictionPenalty, 0.08);
+    assert.equal(scoring.acceptanceScore, 0.636);
+  });
+
+  it('keeps the base path when deep path evaluation cannot clear the acceptance floor', async () => {
+    const prediction = makePrediction('supply_chain', 'Red Sea', 'Shipping disruption: Strait of Hormuz', 0.68, 0.6, '7d', [
+      { type: 'shipping_cost_shock', value: 'Shipping costs are rising around Strait of Hormuz rerouting.', weight: 0.5 },
+      { type: 'energy_supply_shock', value: 'Energy transit pressure is building around Qatar LNG flows.', weight: 0.32 },
+    ]);
+    prediction.newsContext = ['Tanker rerouting is amplifying LNG and freight pressure around the Gulf.'];
+    buildForecastCase(prediction);
+    populateFallbackNarratives([prediction]);
+
+    const baseState = buildForecastRunWorldState({
+      generatedAt: Date.parse('2026-03-23T12:00:00Z'),
+      predictions: [prediction],
+    });
+    const stateUnit = baseState.stateUnits[0];
+    const bundle = makeImpactExpansionBundle(stateUnit.id, stateUnit.label, {
+      dominantRegion: stateUnit.dominantRegion || stateUnit.regions?.[0] || 'Red Sea',
+      macroRegions: stateUnit.macroRegions || ['EMEA'],
+      countries: stateUnit.regions || ['Red Sea'],
+      marketBucketIds: stateUnit.marketBucketIds || ['energy', 'freight', 'rates_inflation'],
+      transmissionChannels: stateUnit.transmissionChannels || ['shipping_cost_shock', 'gas_supply_stress'],
+      topSignalTypes: stateUnit.signalTypes || ['shipping_cost_shock'],
+    });
+    const evaluation = await evaluateDeepForecastPaths({
+      generatedAt: Date.parse('2026-03-23T12:00:00Z'),
+      predictions: [prediction],
+      fullRunPredictions: [prediction],
+      fullRunSituationClusters: baseState.situationClusters,
+      fullRunSituationFamilies: baseState.situationFamilies,
+      fullRunStateUnits: baseState.stateUnits,
+      inputs: {},
+    }, null, bundle.candidatePackets, bundle);
+
+    assert.equal(evaluation.status, 'completed_no_material_change');
+    assert.equal(evaluation.selectedPaths.length, 1);
+    assert.equal(evaluation.selectedPaths[0].type, 'base');
+    assert.equal(evaluation.rejectedPaths.length, 1);
+    assert.equal(evaluation.rejectedPaths[0].type, 'expanded');
+    assert.ok(evaluation.rejectedPaths[0].acceptanceScore < 0.6);
+    assert.equal(evaluation.deepWorldState, null);
   });
 
   it('threads mapped expansion signals into simulation rounds without mutating observed world signals', () => {
