@@ -139,6 +139,11 @@ export async function scrapeRetailer(slug: string) {
       logger.info(`  [${target.id}] parsed ${products.length} products`);
 
       for (const product of products) {
+        // wasDirectHit=true only when the pin URL itself was successfully used.
+        // fetchTarget sets direct:false in the payload when it falls back to Exa,
+        // so this correctly distinguishes "pin worked" from "pin failed, Exa used instead".
+        const wasDirectHit = isDirect && product.rawPayload.direct === true;
+
         const productId = await upsertRetailerProduct({
           retailerId,
           retailerSku: product.retailerSku,
@@ -168,8 +173,8 @@ export async function scrapeRetailer(slug: string) {
           rawPayloadJson: product.rawPayload,
         });
 
-        // Stale-pin maintenance for direct (pinned) targets
-        if (isDirect && pinnedProductId && pinnedMatchId) {
+        // Stale-pin maintenance — only when the pin URL was actually used (not Exa fallback).
+        if (wasDirectHit && pinnedProductId && pinnedMatchId) {
           if (product.inStock) {
             await query(
               `UPDATE retailer_products SET consecutive_out_of_stock = 0, pin_error_count = 0 WHERE id = $1`,
@@ -190,10 +195,17 @@ export async function scrapeRetailer(slug: string) {
           }
         }
 
+        // When a pinned target fell back to Exa (isDirect but !wasDirectHit),
+        // increment pin_error_count so the old broken pin eventually gets disabled.
+        if (isDirect && !wasDirectHit && pinnedProductId && pinnedMatchId) {
+          await handlePinError(pinnedProductId, pinnedMatchId, target.id);
+        }
+
         // For search-based adapters: auto-create product → basket match.
-        // Skip for direct targets — the match already exists and is the one we're using.
+        // Skip only when the pin URL was used directly — the match already exists.
+        // Allow when this is a fresh Exa discovery (including Exa fallback from a broken pin).
         if (
-          !isDirect &&
+          !wasDirectHit &&
           (config.adapter === 'exa-search' || config.adapter === 'search') &&
           product.rawPayload.basketSlug &&
           product.rawPayload.canonicalName
