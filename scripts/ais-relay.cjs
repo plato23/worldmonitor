@@ -1420,7 +1420,7 @@ async function seedCommodityQuotes() {
   if (missing.length > 0) {
     await sleep(3000);
     for (const s of missing) {
-      const meta = COMMODITY_META.get(s) || { name: s, display: s };
+      const meta = COMMODITY_META.get(s);
       const yahoo = await fetchYahooChartDirect(s);
       if (yahoo) quotes.push({ symbol: s, name: meta.name, display: meta.display, price: yahoo.price, change: yahoo.change, sparkline: yahoo.sparkline });
       await sleep(200);
@@ -1428,7 +1428,8 @@ async function seedCommodityQuotes() {
   }
 
   if (quotes.length === 0) {
-    console.warn('[Market] No commodity quotes fetched — skipping Redis write');
+    console.warn('[Market] No commodity quotes fetched — extending existing key TTL, skipping write');
+    try { await upstashExpire('market:commodities-bootstrap:v1', MARKET_SEED_TTL); } catch {}
     return 0;
   }
 
