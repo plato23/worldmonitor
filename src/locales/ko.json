@@ -1531,7 +1531,7 @@
       "noEventsIn7Days": "7일간 사건 없음"
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>GDELT 인텔리전스</strong> 실시간 글로벌 뉴스 모니터링:<ul><li>선별된 주제 카테고리 (분쟁, 사이버 등)</li><li>100개 이상 언어의 기사를 번역</li><li>15분마다 업데이트</li></ul>출처: GDELT Project (gdeltproject.org)"
+      "infoTooltip": "<strong>GDELT 인텔리전스</strong> 실시간 글로벌 뉴스 모니터링:<ul><li>선별된 주제 카테고리 (분쟁, 사이버 등)</li><li>100개 이상 언어의 기사를 번역</li><li>15분마다 업데이트</li><li>14-day tone &amp; volume sparklines per topic (GDELT sentiment analysis)</li></ul>출처: GDELT Project (gdeltproject.org)"
     },
     "telegramIntel": {
       "infoTooltip": "모니터링 중인 Telegram OSINT 채널의 실시간 신호",

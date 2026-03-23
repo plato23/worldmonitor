@@ -1531,7 +1531,7 @@
       "noEventsIn7Days": "Không có sự kiện trong 7 ngày"
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>Tình báo GDELT</strong> Giám sát tin tức toàn cầu thời gian thực:<ul><li>Danh mục chủ đề được chọn lọc (xung đột, mạng, v.v.)</li><li>Bài viết từ hơn 100 ngôn ngữ được dịch</li><li>Cập nhật mỗi 15 phút</li></ul>Nguồn: GDELT Project (gdeltproject.org)"
+      "infoTooltip": "<strong>Tình báo GDELT</strong> Giám sát tin tức toàn cầu thời gian thực:<ul><li>Danh mục chủ đề được chọn lọc (xung đột, mạng, v.v.)</li><li>Bài viết từ hơn 100 ngôn ngữ được dịch</li><li>Cập nhật mỗi 15 phút</li><li>14-day tone &amp; volume sparklines per topic (GDELT sentiment analysis)</li></ul>Nguồn: GDELT Project (gdeltproject.org)"
     },
     "telegramIntel": {
       "infoTooltip": "Tín hiệu thời gian thực từ các kênh OSINT Telegram được giám sát",

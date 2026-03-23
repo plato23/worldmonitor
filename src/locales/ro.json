@@ -1531,7 +1531,7 @@
       "noEventsIn7Days": "Niciun eveniment în 7 zile"
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>GDELT Intelligence</strong> Monitorizare în timp real a știrilor globale:<ul><li>Categorii de subiecte selectate (conflicte, cibernetice etc.)</li><li>Articole din peste 100 de limbi traduse</li><li>Actualizări la fiecare 15 minute</li></ul>Sursa: Proiectul GDELT (gdeltproject.org)"
+      "infoTooltip": "<strong>GDELT Intelligence</strong> Monitorizare în timp real a știrilor globale:<ul><li>Categorii de subiecte selectate (conflicte, cibernetice etc.)</li><li>Articole din peste 100 de limbi traduse</li><li>Actualizări la fiecare 15 minute</li><li>14-day tone &amp; volume sparklines per topic (GDELT sentiment analysis)</li></ul>Sursa: Proiectul GDELT (gdeltproject.org)"
     },
     "telegramIntel": {
       "infoTooltip": "Semnale în timp real de la canalele monitorizate Telegram OSINT",

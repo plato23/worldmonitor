@@ -1531,7 +1531,7 @@
       "noEventsIn7Days": "7天内无事件"
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>GDELT情报</strong>实时全球新闻监测：<ul><li>精选主题分类（冲突、网络安全等）</li><li>100+语言的文章已翻译</li><li>每15分钟更新</li></ul>来源：GDELT Project (gdeltproject.org)"
+      "infoTooltip": "<strong>GDELT情报</strong>实时全球新闻监测：<ul><li>精选主题分类（冲突、网络安全等）</li><li>100+语言的文章已翻译</li><li>每15分钟更新</li><li>14-day tone &amp; volume sparklines per topic (GDELT sentiment analysis)</li></ul>来源：GDELT Project (gdeltproject.org)"
     },
     "telegramIntel": {
       "infoTooltip": "来自监控的Telegram OSINT频道的实时信号",

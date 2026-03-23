@@ -1531,7 +1531,7 @@
       "noEventsIn7Days": "7 gunde olay yok"
     },
     "gdeltIntel": {
-      "infoTooltip": "<strong>GDELT Istihbarati</strong> Gercek zamanli kuresel haber izleme:<ul><li>Secilmis konu kategorileri (catismalar, siber vb.)</li><li>100+ dilden cevrilen makaleler</li><li>Her 15 dakikada guncelleme</li></ul>Kaynak: GDELT Project (gdeltproject.org)"
+      "infoTooltip": "<strong>GDELT Istihbarati</strong> Gercek zamanli kuresel haber izleme:<ul><li>Secilmis konu kategorileri (catismalar, siber vb.)</li><li>100+ dilden cevrilen makaleler</li><li>Her 15 dakikada guncelleme</li><li>14-day tone &amp; volume sparklines per topic (GDELT sentiment analysis)</li></ul>Kaynak: GDELT Project (gdeltproject.org)"
     },
     "telegramIntel": {
       "infoTooltip": "İzlenen Telegram OSINT kanallarından gerçek zamanlı sinyaller",
