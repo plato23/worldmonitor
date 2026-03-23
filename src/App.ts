@@ -572,10 +572,10 @@ export class App {
         INTEL_SOURCES.forEach(f => s.add(f.name));
         return Array.from(s).sort((a, b) => a.localeCompare(b));
       })();
-      const enabledCount = allSourceNames.length - disabledSources.size;
+      const currentlyEnabled = allSourceNames.filter(n => !disabledSources.has(n));
+      const enabledCount = currentlyEnabled.length;
       if (enabledCount > FREE_MAX_SOURCES) {
         const toDisable = enabledCount - FREE_MAX_SOURCES;
-        const currentlyEnabled = allSourceNames.filter(n => !disabledSources.has(n));
         for (const name of currentlyEnabled.slice(FREE_MAX_SOURCES)) {
           disabledSources.add(name);
         }

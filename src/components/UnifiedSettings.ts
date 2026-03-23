@@ -392,7 +392,7 @@ export class UnifiedSettings {
   private toggleDraftPanel(key: string): void {
     const panel = this.draftPanelSettings[key];
     if (!panel) return;
-    if (!panel.enabled && !isPanelEntitled(key, ALL_PANELS[key] ?? panel)) return;
+    if (!panel.enabled && !isPanelEntitled(key, ALL_PANELS[key] ?? panel, isProUser())) return;
     if (!panel.enabled && !isProUser()) {
       const enabledCount = Object.values(this.draftPanelSettings).filter(p => p.enabled).length;
       if (enabledCount >= FREE_MAX_PANELS) {

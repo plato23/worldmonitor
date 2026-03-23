@@ -4,7 +4,6 @@ import { SITE_VARIANT } from './variant';
 import { isDesktopRuntime } from '@/services/runtime';
 // boundary-ignore: getSecretState is a pure env/keychain probe with no service dependencies
 import { getSecretState } from '@/services/runtime-config';
-import { isProUser } from '@/services/widget-store';
 
 const _desktop = isDesktopRuntime();
 
@@ -900,11 +899,11 @@ export const FREE_MAX_SOURCES = 80;
  * Returns true if the current user is entitled to enable/view this panel.
  * Mirrors the entitlement checks in panel-layout.ts (single source of truth).
  */
-export function isPanelEntitled(key: string, config: PanelConfig): boolean {
+export function isPanelEntitled(key: string, config: PanelConfig, isPro = false): boolean {
   if (!config.premium) return true;
   const apiKeyPanels = ['stock-analysis', 'stock-backtest', 'daily-market-brief'];
   if (apiKeyPanels.includes(key)) {
-    return getSecretState('WORLDMONITOR_API_KEY').present || isProUser();
+    return getSecretState('WORLDMONITOR_API_KEY').present || isPro;
   }
   if (config.premium === 'locked') {
     return isDesktopRuntime();

@@ -3,7 +3,8 @@
  * Loaded when the app is opened with ?settings=1 (e.g. from the main window's Settings button).
  */
 import type { PanelConfig } from '@/types';
-import { DEFAULT_PANELS, STORAGE_KEYS, ALL_PANELS, VARIANT_DEFAULTS, getEffectivePanelConfig, isPanelEntitled } from '@/config';
+import { DEFAULT_PANELS, STORAGE_KEYS, ALL_PANELS, VARIANT_DEFAULTS, getEffectivePanelConfig, isPanelEntitled, FREE_MAX_PANELS } from '@/config';
+import { isProUser } from '@/services/widget-store';
 import { SITE_VARIANT } from '@/config/variant';
 import { loadFromStorage, saveToStorage } from '@/utils';
 import { t } from '@/services/i18n';
@@ -63,7 +64,11 @@ export function initSettingsWindow(): void {
           const panelKey = (item as HTMLElement).dataset.panel!;
           const config = panelSettings[panelKey];
           if (config) {
-            if (!config.enabled && !isPanelEntitled(panelKey, ALL_PANELS[panelKey] ?? config)) return;
+            if (!config.enabled && !isPanelEntitled(panelKey, ALL_PANELS[panelKey] ?? config, isProUser())) return;
+            if (!config.enabled && !isProUser()) {
+              const enabledCount = Object.values(panelSettings).filter(p => p.enabled).length;
+              if (enabledCount >= FREE_MAX_PANELS) return;
+            }
             config.enabled = !config.enabled;
             saveToStorage(STORAGE_KEYS.panels, panelSettings);
             render();

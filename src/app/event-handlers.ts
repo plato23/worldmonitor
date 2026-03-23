@@ -3,7 +3,7 @@ import type { AirlineIntelPanel } from '@/components/AirlineIntelPanel';
 import type { CustomWidgetPanel } from '@/components/CustomWidgetPanel';
 import { openWidgetChatModal } from '@/components/WidgetChatModal';
 import { deleteWidget, getWidget, saveWidget, isProUser } from '@/services/widget-store';
-import { FREE_MAX_SOURCES } from '@/config/panels';
+import { FREE_MAX_PANELS, FREE_MAX_SOURCES } from '@/config/panels';
 import type { McpDataPanel } from '@/components/McpDataPanel';
 import { openMcpConnectModal } from '@/components/McpConnectModal';
 import { deleteMcpPanel, getMcpPanel, saveMcpPanel } from '@/services/mcp-store';
@@ -135,6 +135,10 @@ export class EventHandlerManager implements AppModule {
     if (!panelId) return;
     const config = this.ctx.panelSettings[panelId];
     if (!config) return;
+    if (!isProUser()) {
+      const enabledCount = Object.values(this.ctx.panelSettings).filter(p => p.enabled).length;
+      if (enabledCount >= FREE_MAX_PANELS) return;
+    }
     config.enabled = true;
     trackPanelToggled(panelId, true);
     saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
@@ -979,8 +983,8 @@ export class EventHandlerManager implements AppModule {
         const reenabling = this.ctx.disabledSources.has(name);
         if (reenabling && !isProUser()) {
           const allSources = this.getAllSourceNames();
-          const enabledAfter = allSources.length - this.ctx.disabledSources.size + 1;
-          if (enabledAfter > FREE_MAX_SOURCES) {
+          const currentlyEnabled = allSources.filter(n => !this.ctx.disabledSources.has(n)).length;
+          if (currentlyEnabled + 1 > FREE_MAX_SOURCES) {
             this.showToast(t('modals.settingsWindow.freeSourceLimit', { max: String(FREE_MAX_SOURCES) }));
             return;
           }
@@ -995,8 +999,8 @@ export class EventHandlerManager implements AppModule {
       setSourcesEnabled: (names: string[], enabled: boolean) => {
         if (enabled && !isProUser()) {
           const allSources = this.getAllSourceNames();
-          const currentlyEnabled = allSources.length - this.ctx.disabledSources.size;
-          const wouldEnable = names.filter(n => this.ctx.disabledSources.has(n)).length;
+          const currentlyEnabled = allSources.filter(n => !this.ctx.disabledSources.has(n)).length;
+          const wouldEnable = names.filter(n => this.ctx.disabledSources.has(n) && allSources.includes(n)).length;
           if (currentlyEnabled + wouldEnable > FREE_MAX_SOURCES) {
             this.showToast(t('modals.settingsWindow.freeSourceLimit', { max: String(FREE_MAX_SOURCES) }));
             return;
