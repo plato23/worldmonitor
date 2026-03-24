@@ -152,6 +152,7 @@ const RPC_CACHE_TIER: Record<string, CacheTier> = {
   '/api/prediction/v1/list-prediction-markets': 'medium',
   '/api/forecast/v1/get-forecasts': 'medium',
   '/api/forecast/v1/get-simulation-package': 'slow',
+  '/api/forecast/v1/get-simulation-outcome': 'slow',
   '/api/supply-chain/v1/get-chokepoint-status': 'medium',
   '/api/news/v1/list-feed-digest': 'slow',
   '/api/intelligence/v1/get-country-facts': 'daily',

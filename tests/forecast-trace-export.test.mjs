@@ -55,6 +55,13 @@ import {
   SIMULATION_PACKAGE_SCHEMA_VERSION,
   SIMULATION_PACKAGE_LATEST_KEY,
   writeSimulationPackage,
+  SIMULATION_OUTCOME_LATEST_KEY,
+  SIMULATION_OUTCOME_SCHEMA_VERSION,
+  buildSimulationOutcomeKey,
+  writeSimulationOutcome,
+  buildSimulationRound1SystemPrompt,
+  buildSimulationRound2SystemPrompt,
+  extractSimulationRoundPayload,
 } from '../scripts/seed-forecasts.mjs';
 
 import {
@@ -5702,6 +5709,200 @@ describe('simulation package export', () => {
     const snapshot = makeSnapshot();
     // No storageConfig in context and no env vars set in test process — resolveR2StorageConfig returns null
     const result = await writeSimulationPackage(snapshot, { storageConfig: null });
+    assert.equal(result, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MiroFish Phase 2 — Simulation Runner
+// ---------------------------------------------------------------------------
+
+const minimalTheater = {
+  theaterId: 'test-theater-1',
+  theaterRegion: 'Red Sea',
+  theaterLabel: 'Red Sea / Bab-el-Mandeb',
+  candidateStateId: 'state-001',
+  routeFacilityKey: 'Red Sea',
+  dominantRegion: 'Middle East',
+  macroRegions: ['MENA'],
+  topBucketId: 'energy',
+  topChannel: 'price_spike',
+  marketBucketIds: ['energy', 'freight'],
+};
+
+const minimalPkg = {
+  runId: 'run-001',
+  generatedAt: 1711234567000,
+  selectedTheaters: [minimalTheater],
+  entities: [
+    { entityId: 'houthi-forces', name: 'Houthi Forces', class: 'military_or_security_actor', region: 'Yemen', stance: 'active', objectives: [], constraints: [], relevanceToTheater: 'test-theater-1' },
+    { entityId: 'aramco-exports', name: 'Saudi Aramco', class: 'exporter_or_importer', region: 'Saudi Arabia', stance: 'stressed', objectives: [], constraints: [], relevanceToTheater: 'test-theater-1' },
+  ],
+  eventSeeds: [
+    { seedId: 'seed-1', theaterId: 'test-theater-1', type: 'live_news', summary: 'Houthi missile attack on Red Sea shipping', evidenceRefs: ['E1'], timing: 'T+0h' },
+    { seedId: 'seed-2', theaterId: 'test-theater-1', type: 'state_signal', summary: 'Oil tanker rerouting Cape of Good Hope', evidenceRefs: ['E2'], timing: 'T+12h' },
+  ],
+  constraints: { 'test-theater-1': ['No actor may unilaterally close the Strait of Bab-el-Mandeb'] },
+  evaluationTargets: { 'test-theater-1': ['Oil price trajectory over 72h', 'Shipping diversion extent'] },
+  simulationRequirement: { 'test-theater-1': 'Simulate how a Red Sea disruption propagates through energy and logistics markets' },
+};
+
+describe('simulation runner — prompt builders', () => {
+  it('Round 1 prompt contains theater label and region', () => {
+    const prompt = buildSimulationRound1SystemPrompt(minimalTheater, minimalPkg);
+    assert.ok(prompt.includes('Red Sea / Bab-el-Mandeb'), 'should include theater label');
+    assert.ok(prompt.includes('Red Sea'), 'should include theater region');
+  });
+
+  it('Round 1 prompt contains all 3 required path IDs', () => {
+    const prompt = buildSimulationRound1SystemPrompt(minimalTheater, minimalPkg);
+    assert.ok(prompt.includes('"escalation"'), 'should mention escalation path');
+    assert.ok(prompt.includes('"containment"'), 'should mention containment path');
+    assert.ok(prompt.includes('"spillover"'), 'should mention spillover path');
+  });
+
+  it('Round 1 prompt lists entity IDs', () => {
+    const prompt = buildSimulationRound1SystemPrompt(minimalTheater, minimalPkg);
+    assert.ok(prompt.includes('houthi-forces'), 'should include entity entityId');
+    assert.ok(prompt.includes('aramco-exports'), 'should include entity entityId');
+  });
+
+  it('Round 1 prompt lists event seed IDs', () => {
+    const prompt = buildSimulationRound1SystemPrompt(minimalTheater, minimalPkg);
+    assert.ok(prompt.includes('seed-1'), 'should include seed-1');
+    assert.ok(prompt.includes('seed-2'), 'should include seed-2');
+  });
+
+  it('Round 1 prompt includes simulation requirement', () => {
+    const prompt = buildSimulationRound1SystemPrompt(minimalTheater, minimalPkg);
+    assert.ok(prompt.includes('Red Sea disruption'), 'should include simulationRequirement text');
+  });
+
+  it('Round 2 prompt contains Round 1 path summaries', () => {
+    const round1 = {
+      paths: [
+        { pathId: 'escalation', summary: 'Escalation path summary', initialReactions: [{ actorId: 'houthi-forces' }] },
+        { pathId: 'containment', summary: 'Containment path summary', initialReactions: [] },
+        { pathId: 'spillover', summary: 'Spillover path summary', initialReactions: [] },
+      ],
+    };
+    const prompt = buildSimulationRound2SystemPrompt(minimalTheater, minimalPkg, round1);
+    assert.ok(prompt.includes('Escalation path summary'), 'should include round 1 escalation summary');
+    assert.ok(prompt.includes('Containment path summary'), 'should include round 1 containment summary');
+    assert.ok(prompt.includes('ROUND 2'), 'should indicate this is round 2');
+  });
+
+  it('Round 2 prompt includes valid actor IDs list', () => {
+    const round1 = { paths: [] };
+    const prompt = buildSimulationRound2SystemPrompt(minimalTheater, minimalPkg, round1);
+    assert.ok(prompt.includes('houthi-forces'), 'should include valid actor IDs');
+  });
+});
+
+describe('simulation runner — extractSimulationRoundPayload', () => {
+  const r1Payload = JSON.stringify({
+    paths: [
+      { pathId: 'escalation', label: 'Escalate', summary: 'Forces escalate', initialReactions: [] },
+      { pathId: 'containment', label: 'Contain', summary: 'Forces contained', initialReactions: [] },
+      { pathId: 'spillover', label: 'Spill', summary: 'Spillover effect', initialReactions: [] },
+    ],
+    dominantReactions: ['Actor A: escalates'],
+    note: 'Three divergent paths',
+  });
+
+  const r2Payload = JSON.stringify({
+    paths: [
+      { pathId: 'escalation', label: 'Full Escalation', summary: 'Escalated 72h', keyActors: ['houthi-forces'], roundByRoundEvolution: [{ round: 1, summary: 'Round 1' }, { round: 2, summary: 'Round 2' }], confidence: 0.75, timingMarkers: [{ event: 'First strike', timing: 'T+6h' }] },
+      { pathId: 'containment', label: 'Contained', summary: 'Contained 72h', keyActors: [], roundByRoundEvolution: [], confidence: 0.6, timingMarkers: [] },
+      { pathId: 'spillover', label: 'Spilled', summary: 'Spillover 72h', keyActors: [], roundByRoundEvolution: [], confidence: 0.4, timingMarkers: [] },
+    ],
+    stabilizers: ['International pressure'],
+    invalidators: ['New attack'],
+    globalObservations: 'Cross-theater ripple effects expected',
+    confidenceNotes: 'Moderate confidence overall',
+  });
+
+  it('parses valid Round 1 JSON directly', () => {
+    const result = extractSimulationRoundPayload(r1Payload, 1);
+    assert.ok(Array.isArray(result.paths), 'should return paths array');
+    assert.equal(result.paths.length, 3, 'should have 3 paths');
+    assert.equal(result.paths[0].pathId, 'escalation');
+    assert.ok(Array.isArray(result.dominantReactions), 'should include dominantReactions');
+    assert.equal(result.diagnostics.stage, 'direct');
+  });
+
+  it('parses valid Round 2 JSON directly', () => {
+    const result = extractSimulationRoundPayload(r2Payload, 2);
+    assert.ok(Array.isArray(result.paths), 'should return paths array');
+    assert.equal(result.paths.length, 3);
+    assert.ok(Array.isArray(result.stabilizers), 'should include stabilizers');
+    assert.ok(Array.isArray(result.invalidators), 'should include invalidators');
+    assert.ok(typeof result.globalObservations === 'string');
+  });
+
+  it('strips fenced code blocks and parses Round 1', () => {
+    const fenced = `\`\`\`json\n${r1Payload}\n\`\`\``;
+    const result = extractSimulationRoundPayload(fenced, 1);
+    assert.ok(Array.isArray(result.paths), 'should parse fenced JSON');
+    assert.equal(result.paths.length, 3);
+  });
+
+  it('strips <think> tags before parsing', () => {
+    const withThink = `<think>internal reasoning here</think>\n${r1Payload}`;
+    const result = extractSimulationRoundPayload(withThink, 1);
+    assert.ok(Array.isArray(result.paths), 'should parse after stripping think tags');
+  });
+
+  it('returns null paths on invalid JSON', () => {
+    const result = extractSimulationRoundPayload('not valid json', 1);
+    assert.equal(result.paths, null);
+    assert.equal(result.diagnostics.stage, 'no_json');
+  });
+
+  it('returns null paths when paths array is missing', () => {
+    const result = extractSimulationRoundPayload('{"no_paths": true}', 1);
+    assert.equal(result.paths, null);
+  });
+
+  it('returns null paths when no valid pathId present', () => {
+    const badPaths = JSON.stringify({ paths: [{ pathId: 'unknown', summary: 'x' }] });
+    const result = extractSimulationRoundPayload(badPaths, 1);
+    assert.equal(result.paths, null);
+  });
+
+  it('uses extractFirstJsonObject fallback for prefix text', () => {
+    const withPrefix = `Here is the result:\n${r1Payload}\nEnd.`;
+    const result = extractSimulationRoundPayload(withPrefix, 1);
+    assert.ok(Array.isArray(result.paths), 'should parse via extractFirstJsonObject fallback');
+  });
+});
+
+describe('simulation runner — outcome key builder', () => {
+  it('buildSimulationOutcomeKey produces a key ending in simulation-outcome.json', () => {
+    const key = buildSimulationOutcomeKey('run-123', 1711234567000);
+    assert.ok(key.endsWith('/simulation-outcome.json'), `unexpected key: ${key}`);
+    assert.ok(key.includes('run-123'), 'should include runId');
+  });
+
+  it('SIMULATION_OUTCOME_LATEST_KEY is the canonical Redis pointer key', () => {
+    assert.equal(SIMULATION_OUTCOME_LATEST_KEY, 'forecast:simulation-outcome:latest');
+  });
+
+  it('SIMULATION_OUTCOME_SCHEMA_VERSION is v1', () => {
+    assert.equal(SIMULATION_OUTCOME_SCHEMA_VERSION, 'v1');
+  });
+});
+
+describe('simulation runner — writeSimulationOutcome', () => {
+  it('returns null when R2 storage is not configured', async () => {
+    const outcome = { theaterResults: [], failedTheaters: [], runId: 'run-001', generatedAt: Date.now() };
+    const result = await writeSimulationOutcome(minimalPkg, outcome, { storageConfig: null });
+    assert.equal(result, null);
+  });
+
+  it('returns null when pkg has no runId', async () => {
+    const outcome = { theaterResults: [], failedTheaters: [] };
+    const result = await writeSimulationOutcome({ generatedAt: Date.now() }, outcome, { storageConfig: null });
     assert.equal(result, null);
   });
 });
