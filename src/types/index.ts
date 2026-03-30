@@ -651,6 +651,8 @@ export interface MapLayers {
   commodityPorts: boolean;
   webcams: boolean;
   weatherRadar: boolean;
+  // Health layers
+  diseaseOutbreaks: boolean;
 }
 
 export interface AIDataCenter {
@@ -1477,4 +1479,6 @@ export interface CountryBriefSignals {
   gpsJammingHexes: number;
   isTier1: boolean;
   thermalEscalations: number;
+  sanctionsDesignations: number;
+  sanctionsNewDesignations: number;
 }

@@ -357,6 +357,11 @@ export interface GetFearGreedIndexResponse {
   aaiiBear: number;
   fedRate: string;
   unavailable: boolean;
+  fsiValue: number;
+  fsiLabel: string;
+  hygPrice: number;
+  tltPrice: number;
+  sectorPerformance: FearGreedSectorPerformance[];
 }
 
 export interface FearGreedCategory {
@@ -365,6 +370,60 @@ export interface FearGreedCategory {
   contribution: number;
   degraded: boolean;
   inputsJson: string;
+}
+
+export interface FearGreedSectorPerformance {
+  symbol: string;
+  name: string;
+  change1d: number;
+}
+
+export interface ListEarningsCalendarRequest {
+  fromDate: string;
+  toDate: string;
+}
+
+export interface ListEarningsCalendarResponse {
+  earnings: EarningsEntry[];
+  fromDate: string;
+  toDate: string;
+  total: number;
+  unavailable: boolean;
+}
+
+export interface EarningsEntry {
+  symbol: string;
+  company: string;
+  date: string;
+  hour: string;
+  epsEstimate: number;
+  revenueEstimate: number;
+  epsActual: number;
+  revenueActual: number;
+  hasActuals: boolean;
+  surpriseDirection: string;
+}
+
+export interface GetCotPositioningRequest {
+}
+
+export interface GetCotPositioningResponse {
+  instruments: CotInstrument[];
+  reportDate: string;
+  unavailable: boolean;
+}
+
+export interface CotInstrument {
+  name: string;
+  code: string;
+  reportDate: string;
+  assetManagerLong: string;
+  assetManagerShort: string;
+  leveragedFundsLong: string;
+  leveragedFundsShort: string;
+  dealerLong: string;
+  dealerShort: string;
+  netPct: number;
 }
 
 export interface FieldViolation {
@@ -831,6 +890,55 @@ export class MarketServiceClient {
     }
 
     return await resp.json() as GetFearGreedIndexResponse;
+  }
+
+  async listEarningsCalendar(req: ListEarningsCalendarRequest, options?: MarketServiceCallOptions): Promise<ListEarningsCalendarResponse> {
+    let path = "/api/market/v1/list-earnings-calendar";
+    const params = new URLSearchParams();
+    if (req.fromDate != null && req.fromDate !== "") params.set("fromDate", String(req.fromDate));
+    if (req.toDate != null && req.toDate !== "") params.set("toDate", String(req.toDate));
+    const url = this.baseURL + path + (params.toString() ? "?" + params.toString() : "");
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as ListEarningsCalendarResponse;
+  }
+
+  async getCotPositioning(req: GetCotPositioningRequest, options?: MarketServiceCallOptions): Promise<GetCotPositioningResponse> {
+    let path = "/api/market/v1/get-cot-positioning";
+    const url = this.baseURL + path;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...this.defaultHeaders,
+      ...options?.headers,
+    };
+
+    const resp = await this.fetchFn(url, {
+      method: "GET",
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!resp.ok) {
+      return this.handleError(resp);
+    }
+
+    return await resp.json() as GetCotPositioningResponse;
   }
 
   private async handleError(resp: Response): Promise<never> {

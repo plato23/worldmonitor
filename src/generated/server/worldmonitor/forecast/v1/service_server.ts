@@ -32,6 +32,9 @@ export interface Forecast {
   perspectives?: Perspectives;
   projections?: Projections;
   caseFile?: ForecastCase;
+  simulationAdjustment: number;
+  simPathConfidence: number;
+  demotedBySimulation: boolean;
 }
 
 export interface ForecastSignal {
@@ -136,6 +139,22 @@ export interface GetSimulationPackageResponse {
   error: string;
 }
 
+export interface GetSimulationOutcomeRequest {
+  runId: string;
+}
+
+export interface GetSimulationOutcomeResponse {
+  found: boolean;
+  runId: string;
+  outcomeKey: string;
+  schemaVersion: string;
+  theaterCount: number;
+  generatedAt: number;
+  note: string;
+  error: string;
+  theaterSummariesJson: string;
+}
+
 export interface FieldViolation {
   field: string;
   description: string;
@@ -183,6 +202,7 @@ export interface RouteDescriptor {
 export interface ForecastServiceHandler {
   getForecasts(ctx: ServerContext, req: GetForecastsRequest): Promise<GetForecastsResponse>;
   getSimulationPackage(ctx: ServerContext, req: GetSimulationPackageRequest): Promise<GetSimulationPackageResponse>;
+  getSimulationOutcome(ctx: ServerContext, req: GetSimulationOutcomeRequest): Promise<GetSimulationOutcomeResponse>;
 }
 
 export function createForecastServiceRoutes(
@@ -264,6 +284,53 @@ export function createForecastServiceRoutes(
 
           const result = await handler.getSimulationPackage(ctx, body);
           return new Response(JSON.stringify(result as GetSimulationPackageResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/forecast/v1/get-simulation-outcome",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: GetSimulationOutcomeRequest = {
+            runId: params.get("runId") ?? "",
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("getSimulationOutcome", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getSimulationOutcome(ctx, body);
+          return new Response(JSON.stringify(result as GetSimulationOutcomeResponse), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });

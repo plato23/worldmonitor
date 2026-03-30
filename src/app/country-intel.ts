@@ -40,6 +40,8 @@ import type { StrategicPosturePanel } from '@/components/StrategicPosturePanel';
 import type { NewsItem } from '@/types';
 import { getNearbyInfrastructure } from '@/services/related-assets';
 import { toFlagEmoji } from '@/utils/country-flag';
+import { buildDependencyGraph } from '@/services/infrastructure-cascade';
+import { getActiveFrameworkForPanel, subscribeFrameworkChange } from '@/services/analysis-framework-store';
 
 type IntlDisplayNamesCtor = new (
   locales: string | string[],
@@ -59,6 +61,8 @@ type CountryStockSnapshot = {
 export class CountryIntelManager implements AppModule {
   private ctx: AppContext;
   private briefRequestToken = 0;
+  private frameworkUnsubscribe: (() => void) | null = null;
+  private _fwDebounce: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: AppContext) {
     this.ctx = ctx;
@@ -66,12 +70,24 @@ export class CountryIntelManager implements AppModule {
 
   init(): void {
     this.setupCountryIntel();
+    this.frameworkUnsubscribe = subscribeFrameworkChange('country-brief', () => {
+      const page = this.ctx.countryBriefPage;
+      if (!page?.isVisible()) return;
+      const code = page.getCode();
+      const name = page.getName() ?? code;
+      if (!code || !name) return;
+      if (this._fwDebounce) clearTimeout(this._fwDebounce);
+      this._fwDebounce = setTimeout(() => void this.openCountryBriefByCode(code, name), 400);
+    });
   }
 
   destroy(): void {
+    if (this._fwDebounce) { clearTimeout(this._fwDebounce); this._fwDebounce = null; }
     this.ctx.countryTimeline?.destroy();
     this.ctx.countryTimeline = null;
     this.ctx.countryBriefPage = null;
+    this.frameworkUnsubscribe?.();
+    this.frameworkUnsubscribe = null;
   }
 
   private setupCountryIntel(): void {
@@ -326,7 +342,8 @@ export class CountryIntelManager implements AppModule {
           } catch { /* RAG unavailable */ }
         }
 
-        briefText = await this.fetchCountryIntelBrief(code, contextSnapshot);
+        const countryFw = getActiveFrameworkForPanel('country-brief');
+        briefText = await this.fetchCountryIntelBrief(code, contextSnapshot, countryFw?.systemPromptAppend ?? '');
       } catch { /* server unreachable */ }
 
       if (briefText) {
@@ -397,12 +414,16 @@ export class CountryIntelManager implements AppModule {
     page.updateScore?.(score, signals);
   }
 
-  private async fetchCountryIntelBrief(code: string, contextSnapshot: string): Promise<string> {
+  private async fetchCountryIntelBrief(code: string, contextSnapshot: string, framework = ''): Promise<string> {
     const lang = getCurrentLanguage();
     const params = new URLSearchParams({ country_code: code, lang });
     const trimmed = contextSnapshot.trim();
     if (trimmed.length > 0) {
-      params.set('context', trimmed.slice(0, 2200));
+      // 3800 chars ≈ ~950 tokens; raised from 2200 to include infra context. Monitor p95 LLM latency if timeouts increase.
+      params.set('context', trimmed.slice(0, 3800));
+    }
+    if (framework) {
+      params.set('framework', framework.slice(0, 2000));
     }
 
     const resp = await fetch(toApiUrl(`/api/intelligence/v1/get-country-intel-brief?${params.toString()}`), {
@@ -426,6 +447,10 @@ export class CountryIntelManager implements AppModule {
     const lines: string[] = [];
     lines.push(`Country: ${country} (${code})`);
 
+    // Infrastructure grounding must appear early so it survives the context char limit
+    const infraContext = this.buildInfrastructureContext(code);
+    if (infraContext) lines.push(infraContext);
+
     if (score) {
       lines.push(`CII: ${score.score}/100 (${score.level}), trend=${score.trend}, 24h_change=${score.change24h}`);
       lines.push(`CII components: unrest=${Math.round(score.components.unrest)}, conflict=${Math.round(score.components.conflict)}, security=${Math.round(score.components.security)}, information=${Math.round(score.components.information)}`);
@@ -437,6 +462,21 @@ export class CountryIntelManager implements AppModule {
 
     if (signals.travelAdvisoryMaxLevel) {
       lines.push(`Travel advisory max level: ${signals.travelAdvisoryMaxLevel}`);
+    }
+
+    if (signals.sanctionsDesignations > 0) {
+      const newPart = signals.sanctionsNewDesignations > 0 ? `, +${signals.sanctionsNewDesignations} new` : '';
+      lines.push(`Sanctions: ${signals.sanctionsDesignations} active designations${newPart}`);
+    }
+
+    if (signals.displacementOutflow > 0) {
+      lines.push(`Displacement outflow: ${signals.displacementOutflow.toLocaleString()} persons`);
+    }
+    if (signals.climateStress > 0) {
+      lines.push(`Climate stress: ${Math.round(signals.climateStress)}/100`);
+    }
+    if (signals.isTier1) {
+      lines.push(`Major power: yes`);
     }
 
     const stockIndex = typeof context.stockIndex === 'string' ? context.stockIndex : '';
@@ -459,6 +499,63 @@ export class CountryIntelManager implements AppModule {
     }
 
     return lines.join('\n');
+  }
+
+  private buildInfrastructureContext(code: string): string {
+    try {
+      const graph = buildDependencyGraph();
+      const countryId = `country:${code}`;
+      const incomingEdges = graph.incoming.get(countryId) || [];
+      const parts: string[] = [];
+
+      const cables = incomingEdges
+        .filter(e => (e.type === 'serves' || e.type === 'lands_at') && e.from.startsWith('cable:'))
+        .sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0))
+        .slice(0, 3)
+        .map(e => {
+          const node = graph.nodes.get(e.from);
+          const share = e.strength ? ` (${Math.round(e.strength * 100)}% capacity)` : '';
+          return node ? `${node.name}${share}` : '';
+        }).filter(Boolean);
+      if (cables.length) parts.push(`Cables: ${cables.join(', ')}`);
+
+      const pipes = incomingEdges
+        .filter(e => e.type === 'serves' && e.from.startsWith('pipeline:'))
+        .sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0))
+        .slice(0, 3)
+        .map(e => {
+          const node = graph.nodes.get(e.from);
+          const status = typeof node?.metadata?.status === 'string' ? node.metadata.status : undefined;
+          return node ? `${node.name}${status ? ` (${status})` : ''}` : '';
+        }).filter(Boolean);
+      if (pipes.length) parts.push(`Pipelines: ${pipes.join(', ')}`);
+
+      const ports = incomingEdges
+        .filter(e => e.type === 'serves' && e.from.startsWith('port:'))
+        .sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0))
+        .slice(0, 3)
+        .map(e => {
+          const node = graph.nodes.get(e.from);
+          const rank = node?.metadata?.rank as number | undefined;
+          const type = node?.metadata?.type as string | undefined;
+          return node ? `${node.name}${rank ? ` (rank #${rank}${type ? ', ' + type : ''})` : ''}` : '';
+        }).filter(Boolean);
+      if (ports.length) parts.push(`Ports: ${ports.join(', ')}`);
+
+      const chokepoints = incomingEdges
+        .filter(e => e.type === 'trade_dependency' && e.from.startsWith('chokepoint:'))
+        .map(e => {
+          const node = graph.nodes.get(e.from);
+          const reason = e.metadata?.relationship as string | undefined;
+          return node ? `${node.name}${reason ? ` (${reason})` : ''}` : '';
+        }).filter(Boolean)
+        .slice(0, 2);
+      if (chokepoints.length) parts.push(`Waterways: ${chokepoints.join(', ')}`);
+
+      return parts.length > 0 ? `Infrastructure exposure: ${parts.join(' | ')}` : '';
+    } catch {
+      return '';
+    }
   }
 
   private mountCountryTimeline(code: string, country: string): void {
@@ -665,6 +762,12 @@ export class CountryIntelManager implements AppModule {
       ).length;
     }
 
+    const sanctionsCountry = this.ctx.intelligenceCache.sanctions?.countries.find(
+      (c) => c.countryCode.toUpperCase() === code,
+    );
+    const sanctionsDesignations = sanctionsCountry?.entryCount ?? 0;
+    const sanctionsNewDesignations = sanctionsCountry?.newEntryCount ?? 0;
+
     return {
       criticalNews,
       protests,
@@ -689,6 +792,8 @@ export class CountryIntelManager implements AppModule {
       gpsJammingHexes: (ciiData?.gpsJammingHighCount ?? 0) + (ciiData?.gpsJammingMediumCount ?? 0),
       isTier1,
       thermalEscalations,
+      sanctionsDesignations,
+      sanctionsNewDesignations,
     };
   }
 

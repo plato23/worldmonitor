@@ -1,10 +1,15 @@
 #!/usr/bin/env node
+// @ts-check
+/// <reference path="./seed-forecasts.types.d.ts" />
 
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { loadEnvFile, runSeed, CHROME_UA } from './_seed-utils.mjs';
 import { tagRegions } from './_prediction-scoring.mjs';
 import { resolveR2StorageConfig, putR2JsonObject, getR2JsonObject } from './_r2-storage.mjs';
+import { extractFirstJsonObject, extractFirstJsonArray, cleanJsonText } from './_llm-json.mjs';
+import { loadTickerSet } from './_ticker-validation.mjs';
+import { computeEmaWindows, computeRisk24h } from './_ema-threat-engine.mjs';
 
 const _isDirectRun = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'));
 if (_isDirectRun) loadEnvFile(import.meta.url);
@@ -32,6 +37,22 @@ const FORECAST_DEEP_MAX_CANDIDATES = 3;
 const FORECAST_DEEP_RUN_PREFIX = 'seed-data/forecast-traces';
 const SIMULATION_PACKAGE_SCHEMA_VERSION = 'v1';
 const SIMULATION_PACKAGE_LATEST_KEY = 'forecast:simulation-package:latest';
+const SIMULATION_OUTCOME_LATEST_KEY = 'forecast:simulation-outcome:latest';
+const SIMULATION_OUTCOME_SCHEMA_VERSION = 'v1';
+const SIMULATION_RUNNER_VERSION = 'v1';
+const SIMULATION_TASK_KEY_PREFIX = 'forecast:simulation-task:v1';
+const SIMULATION_TASK_QUEUE_KEY = 'forecast:simulation-task-queue:v1';
+const SIMULATION_LOCK_KEY_PREFIX = 'forecast:simulation-lock:v1';
+const SIMULATION_DECORATIONS_KEY = 'forecast:sim-decorations:v1';
+const SIMULATION_DECORATIONS_META_KEY = `seed-meta:${SIMULATION_DECORATIONS_KEY}`;
+const SIMULATION_DECORATIONS_TTL_SECONDS = 86400 * 3; // 3 days — outlasts typical run cadence
+const SIMULATION_DECORATIONS_MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48h — skip apply if no simulation ran recently
+const VALID_RUN_ID_RE = /^\d{13,}-[a-z0-9-]{1,64}$/i;
+const SIMULATION_ROUND1_MAX_TOKENS = 2200;
+const SIMULATION_ROUND2_MAX_TOKENS = 2500;
+const SIMULATION_LOCK_TTL_SECONDS = 20 * 60;
+const SIMULATION_TASK_TTL_SECONDS = 4 * 60 * 60;
+const SIMULATION_POLL_INTERVAL_MS = 30 * 1000;
 const PUBLISH_MIN_PROBABILITY = 0;
 const PANEL_MIN_PROBABILITY = 0.1;
 const CANONICAL_PAYLOAD_SOFT_LIMIT_BYTES = 4 * 1024 * 1024;
@@ -51,6 +72,13 @@ const MIN_TARGET_PUBLISHED_FORECASTS = 10;
 const MAX_TARGET_PUBLISHED_FORECASTS = 14;
 const MAX_PRESELECTED_FORECASTS_PER_FAMILY = 3;
 const MAX_PRESELECTED_FORECASTS_PER_SITUATION = 2;
+// stateKind values that legitimately drive maritime energy/freight supply_chain forecasts.
+// Defined at module scope — not per-call — to avoid re-allocating the Set on every invocation.
+const MARITIME_BUCKET_STATE_KINDS = new Set([
+  'maritime_disruption', 'port_disruption', 'shipping_disruption',
+  'chokepoint_closure', 'naval_blockade', 'piracy_escalation',
+  'transport_pressure', // shipping route pressure (e.g. Red Sea, Suez transit delays) is maritime-relevant
+]);
 const CYBER_MIN_THREATS_PER_COUNTRY = 5;
 const CYBER_MAX_FORECASTS = 12;
 const CYBER_SCORE_TYPE_MULTIPLIER = 1.5;    // bonus per distinct threat type
@@ -135,6 +163,24 @@ const CHOKEPOINT_MARKET_REGIONS = {
   'Lombok Strait': 'Southeast Asia',
   'Cape of Good Hope': 'Southern Africa',
 };
+
+const THEATER_GEO_GROUPS = {
+  'Middle East': 'MENA_Gulf',       // Strait of Hormuz, Persian Gulf, Arabian Sea, Iran
+  'Persian Gulf': 'MENA_Gulf',
+  'Red Sea': 'MENA_RedSea',         // Red Sea, Bab el-Mandeb, Suez Canal
+  'South China Sea': 'AsiaPacific',
+  'Western Pacific': 'AsiaPacific',
+  'Southeast Asia': 'AsiaPacific',
+  'Black Sea': 'EastEurope',
+  'Northern Europe': 'NorthernEurope',
+  'Mediterranean': 'Mediterranean',
+  'Central America': 'LatinAmerica',
+  'Southern Africa': 'SouthernAfrica',
+};
+
+function getTheaterGeoGroup(marketRegion) {
+  return THEATER_GEO_GROUPS[marketRegion] || marketRegion || 'unknown';
+}
 
 const MARKET_INPUT_KEYS = {
   stocks: 'market:stocks-bootstrap:v1',
@@ -529,6 +575,7 @@ const IMPACT_VARIABLE_CHANNELS = Object.fromEntries(
 );
 
 function getRedisCredentials() {
+  if (_testRedisStore) return { url: 'http://test', token: 'test' };
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) throw new Error('Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN');
@@ -556,7 +603,12 @@ async function redisCommand(url, token, command) {
   return resp.json();
 }
 
+/** In-memory Redis store injected by tests. When set, redisGet/redisSet skip network calls. */
+let _testRedisStore = null;
+function __setRedisStoreForTests(store) { _testRedisStore = store; }
+
 async function redisGet(url, token, key) {
+  if (_testRedisStore) return _testRedisStore[key] ?? null;
   const resp = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
     headers: { Authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(10_000),
@@ -637,6 +689,8 @@ async function readInputKeys() {
     MARKET_INPUT_KEYS.bisPolicy,
     MARKET_INPUT_KEYS.shippingRates,
     MARKET_INPUT_KEYS.correlationCards,
+    'conflict:acled:v1:all:0:0',
+    'conflict:ema-windows:v1',
     ...fredKeys,
   ];
   const pipeline = keys.map(k => ['GET', k]);
@@ -687,6 +741,12 @@ async function readInputKeys() {
     bisPolicyRates: parsedByKey[MARKET_INPUT_KEYS.bisPolicy],
     shippingRates: parsedByKey[MARKET_INPUT_KEYS.shippingRates],
     correlationCards: parsedByKey[MARKET_INPUT_KEYS.correlationCards],
+    acledEvents: (() => {
+      const raw = parsedByKey['conflict:acled:v1:all:0:0'];
+      if (!raw) return [];
+      return Array.isArray(raw) ? raw : (raw?.events ?? []);
+    })(),
+    emaWindowsRaw: results[keys.indexOf('conflict:ema-windows:v1')]?.result ?? null,
     fredSeries,
   };
 }
@@ -852,7 +912,7 @@ function extractCiiScores(inputs) {
   return arr.map(normalizeCiiEntry);
 }
 
-function detectConflictScenarios(inputs) {
+function detectConflictScenarios(inputs, emaRiskScores) {
   const predictions = [];
   const scores = extractCiiScores(inputs);
   const theaters = inputs.theaterPosture?.theaters || [];
@@ -891,7 +951,19 @@ function detectConflictScenarios(inputs) {
 
     const ciiNorm = normalize(c.score, 50, 100);
     const eventBoost = (matchingIran.length + matchingUcdp.length) > 0 ? 0.1 : 0;
-    const prob = Math.min(0.9, ciiNorm * 0.6 + eventBoost + (c.trend === 'rising' ? 0.1 : 0));
+    let prob = Math.min(0.9, ciiNorm * 0.6 + eventBoost + (c.trend === 'rising' ? 0.1 : 0));
+
+    const emaRisk = emaRiskScores?.get(countryName ?? '');
+    if (emaRisk?.velocitySpike) {
+      signals.push({
+        type: 'velocity_spike',
+        value: `EMA z-score: ${emaRisk.zscore.toFixed(1)} (${emaRisk.risk24h}/100 risk)`,
+        weight: 0.35,
+      });
+      prob = Math.min(0.99, prob + 0.08);
+      sourceCount++;
+    }
+
     const confidence = Math.max(0.3, normalize(sourceCount, 0, 4));
 
     predictions.push(makePrediction(
@@ -1207,6 +1279,15 @@ function computeStateDerivedBucketCandidate(domain, stateUnit, bucket, marketCon
     (domain === 'supply_chain' && directBucket ? 0.05 : 0),
   );
 
+  // Maritime-specific buckets (energy, freight in supply_chain) require actual maritime disruption state.
+  // Without this gate, security escalations in landlocked/non-chokepoint states (Brazil, Cuba, etc.)
+  // generate spurious "Maritime energy flow disruption" forecasts that have no causal basis.
+  const requiresMaritimeStateKind = domain === 'supply_chain' && ['freight', 'energy'].includes(bucket.id);
+  // Block if stateKind absent OR not in allowlist — falsy stateKind must NOT bypass this gate.
+  if (requiresMaritimeStateKind && !MARITIME_BUCKET_STATE_KINDS.has(stateUnit.stateKind ?? '')) {
+    return null;
+  }
+
   const supplyChainFallbackEligible = domain === 'supply_chain'
     && stateDomainMatch
     && directBucket
@@ -1420,7 +1501,43 @@ function deriveStateDrivenForecasts({
     derived.push(fallback.prediction);
   }
 
-  return derived
+  // Cross-state semantic deduplication: cap same (bucketId × stateKind) combinations.
+  // Without this, every monitored sea/chokepoint produces an identical "Inflation from [X]" bet —
+  // Baltic Sea 66%, Red Sea 66%, Persian Gulf 66%, Hormuz 70%... all the same bet, useless.
+  // Keep the top MAX_CROSS_STATE_SAME_BUCKET_KIND by (probability × confidence), and require
+  // a minimum probability spread so near-identical scores don't both make the cut.
+  const MAX_CROSS_STATE_SAME_BUCKET_KIND = 2;
+  const MIN_CROSS_STATE_PROBABILITY_SPREAD = 0.06;
+
+  const crossGroups = new Map(); // groupKey → sorted array of preds
+  const noDerivation = [];
+  for (const pred of derived) {
+    const bucketId = pred.stateDerivation?.bucketId || '';
+    const stateKind = pred.stateDerivation?.sourceStateKind || '';
+    if (!bucketId || !stateKind) { noDerivation.push(pred); continue; }
+    const key = `${bucketId}:${stateKind}`;
+    if (!crossGroups.has(key)) crossGroups.set(key, []);
+    crossGroups.get(key).push(pred);
+  }
+
+  const crossDeduped = [...noDerivation];
+  for (const group of crossGroups.values()) {
+    // Sort by probability descending so the spread check (probability delta) is monotonic.
+    // Secondary: confidence breaks ties to prefer more certain forecasts.
+    group.sort((a, b) => b.probability - a.probability || b.confidence - a.confidence);
+    let lastKeptProb = null;
+    let keptCount = 0;
+    for (const pred of group) {
+      if (keptCount >= MAX_CROSS_STATE_SAME_BUCKET_KIND) break;
+      // Skip if too close to the last kept forecast — ensures meaningful differentiation between kept bets.
+      if (lastKeptProb !== null && Math.abs(pred.probability - lastKeptProb) < MIN_CROSS_STATE_PROBABILITY_SPREAD) continue;
+      lastKeptProb = pred.probability;
+      keptCount++;
+      crossDeduped.push(pred);
+    }
+  }
+
+  return crossDeduped
     .sort((a, b) => (Number(a.stateDerivedBackfill) - Number(b.stateDerivedBackfill))
       || (b.probability * b.confidence) - (a.probability * a.confidence)
       || a.title.localeCompare(b.title));
@@ -1671,7 +1788,7 @@ function detectInfraScenarios(inputs) {
 }
 
 // ── Phase 4: Standalone detectors ───────────────────────────
-function detectUcdpConflictZones(inputs) {
+function detectUcdpConflictZones(inputs, emaRiskScores) {
   const predictions = [];
   const ucdp = Array.isArray(inputs.ucdpEvents) ? inputs.ucdpEvents : inputs.ucdpEvents?.events || [];
   if (ucdp.length === 0) return predictions;
@@ -1685,12 +1802,24 @@ function detectUcdpConflictZones(inputs) {
 
   for (const [country, count] of Object.entries(byCountry)) {
     if (count < 10) continue;
+
+    const signals = [{ type: 'ucdp', value: `${count} UCDP conflict events`, weight: 0.5 }];
+    let prob = Math.min(0.85, normalize(count, 5, 100) * 0.7);
+
+    const emaRisk = emaRiskScores?.get(country?.toLowerCase?.() ?? '');
+    if (emaRisk?.velocitySpike) {
+      signals.push({
+        type: 'velocity_spike',
+        value: `EMA z-score: ${emaRisk.zscore.toFixed(1)} (${emaRisk.risk24h}/100 risk)`,
+        weight: 0.35,
+      });
+      prob = Math.min(0.99, prob + 0.08);
+    }
+
     predictions.push(makePrediction(
       'conflict', country,
       `Active armed conflict: ${country}`,
-      Math.min(0.85, normalize(count, 5, 100) * 0.7),
-      0.3, '30d',
-      [{ type: 'ucdp', value: `${count} UCDP conflict events`, weight: 0.5 }],
+      prob, 0.3, '30d', signals,
     ));
   }
   return predictions;
@@ -3104,39 +3233,9 @@ async function extractCriticalSignalBundle(inputs) {
   return bundle;
 }
 
-function extractFirstJsonObject(text) {
-  const start = text.indexOf('{');
-  if (start === -1) return '';
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (char === '{') depth += 1;
-    if (char === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return text.slice(start);
-}
-
 function tryParseImpactExpansionCandidate(candidate) {
   try {
-    const parsed = JSON.parse(candidate);
+    const parsed = JSON.parse(cleanJsonText(candidate));
     if (Array.isArray(parsed?.candidates)) return { candidates: parsed.candidates, stage: 'object_candidates' };
     if (Array.isArray(parsed)) return { candidates: parsed, stage: 'direct_array' };
   } catch {
@@ -3145,7 +3244,7 @@ function tryParseImpactExpansionCandidate(candidate) {
   // Gemini sometimes returns '"candidates": [...]' without outer braces (especially when
   // wrapping in a markdown code fence). Try wrapping in {} to recover.
   try {
-    const wrapped = JSON.parse(`{${candidate}}`);
+    const wrapped = JSON.parse(cleanJsonText(`{${candidate}}`));
     if (Array.isArray(wrapped?.candidates)) return { candidates: wrapped.candidates, stage: 'wrapped_candidates' };
   } catch {
     // continue
@@ -4484,7 +4583,7 @@ function buildForecastRunStatusPayload({
 
 function summarizeImpactPathScore(path = null) {
   if (!path) return null;
-  return {
+  const summary = {
     pathId: path.pathId || '',
     type: path.type || '',
     candidateStateId: path.candidateStateId || '',
@@ -4495,6 +4594,26 @@ function summarizeImpactPathScore(path = null) {
     acceptanceScore: Number(path.acceptanceScore || 0),
     reportableQualityScore: Number(path.reportableQualityScore || 0),
     marketCoherenceScore: Number(path.marketCoherenceScore || 0),
+  };
+  if (path.simulationAdjustment !== undefined) {
+    summary.simulationAdjustment = Number(path.simulationAdjustment);
+    summary.mergedAcceptanceScore = Number(path.mergedAcceptanceScore || path.acceptanceScore || 0);
+    if (path.simulationSignal !== undefined) {
+      summary.simulationSignal = path.simulationSignal;
+    }
+  }
+  return summary;
+}
+
+function buildForecastEvalPayload(data = {}) {
+  const evaluation = data?.deepPathEvaluation || null;
+  if (!evaluation) return null;
+  return {
+    runId: data?.runId || '',
+    generatedAt: data?.generatedAt || Date.now(),
+    status: evaluation.status || '',
+    selectedPaths: evaluation.selectedPaths || [],
+    rejectedPaths: evaluation.rejectedPaths || [],
   };
 }
 
@@ -4589,6 +4708,7 @@ function buildImpactExpansionDebugPayload(data = {}, worldState = null, runId = 
     },
     selectedPaths: (data?.deepPathEvaluation?.selectedPaths || []).map(summarizeImpactPathScore).filter(Boolean),
     rejectedPaths: (data?.deepPathEvaluation?.rejectedPaths || []).map(summarizeImpactPathScore).filter(Boolean),
+    simulationEvidence: data?.simulationEvidence || null,
   };
 }
 
@@ -4813,6 +4933,9 @@ function buildPublishedForecastPayload(pred) {
       d30: Number(pred.projections.d30 || 0),
     } : null,
     caseFile: slimForecastCaseForPublish(pred.caseFile),
+    simulationAdjustment: Number(pred.simulationAdjustment || 0),
+    simPathConfidence: Number(pred.simPathConfidence || 0),
+    demotedBySimulation: !!pred.demotedBySimulation,
   };
 }
 
@@ -11166,6 +11289,375 @@ function annotateDeepForecastOrigins(worldState, acceptedPaths = []) {
   return worldState;
 }
 
+function normalizeActorName(name) {
+  let s = String(name || '').trim();
+  const colonIdx = s.indexOf(':');
+  if (colonIdx > 0 && /^[a-z][a-z0-9_-]*$/.test(s.slice(0, colonIdx))) {
+    s = s.slice(colonIdx + 1);
+  }
+  return s.toLowerCase().replace(/[_-]/g, ' ').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+const BUCKET_KEYWORDS = {
+  energy: ['oil', 'crude', 'petroleum', 'energy', 'lng', 'gas', 'fuel', 'brent', 'wti'],
+  freight: ['freight', 'shipping', 'container', 'cargo', 'transit', 'route', 'chokepoint'],
+  sovereign_risk: ['sovereign', 'bond', 'yield', 'credit', 'default', 'geopolit', 'security', 'military', 'escalat'],
+  fx_stress: ['currency', 'fx', 'exchange rate', 'dollar', 'dolar', 'devaluat'],
+  rates_inflation: ['inflation', 'interest rate', 'rate', 'price spike', 'cost push'],
+  semis: ['semiconductor', 'chip', 'semi', 'tech', 'cyber'],
+  crypto_stablecoins: ['crypto', 'bitcoin', 'stablecoin', 'digital asset'],
+  defense: ['defense', 'military', 'arms', 'weapon', 'nato'],
+};
+
+const CHANNEL_KEYWORDS = {
+  energy_supply_shock: ['oil supply', 'crude supply', 'energy supply', 'oil shock', 'energy shock', 'petroleum supply', 'oil infrastructure', 'supply disruption', 'oil price spike', 'crude price', 'energy price'],
+  gas_supply_stress: ['gas supply', 'lng supply', 'natural gas', 'gas price'],
+  commodity_repricing: ['commodity', 'repricing', 'shortage', 'supply chain'],
+  oil_macro_shock: ['oil macro', 'crude macro', 'oil price macro', 'petro macro'],
+  global_crude_spread_stress: ['crude spread', 'brent wti', 'grade spread'],
+  shipping_cost_shock: ['shipping cost', 'freight cost', 'freight rate', 'route disruption', 'chokepoint', 'transit', 'shipping interrupt', 'rerouting', 'vessel', 'shipping lane', 'maritime'],
+  sovereign_stress: ['sovereign', 'debt stress', 'default risk', 'credit stress', 'bond spread'],
+  risk_off_rotation: ['risk off', 'risk aversion', 'flight to safety', 'sell off', 'selloff', 'sell-off', 'capital flight', 'capital outflow', 'risk premium', 'avers', 'retreat', 'flight to', 'sovereign risk', 'shockwave', 'shock wave', 'economic shock', 'contagion', 'spiral', 'crisis'],
+  security_escalation: ['escalat', 'military action', 'conflict', 'war', 'strike', 'attack', 'military', 'geopolit'],
+  yield_curve_stress: ['yield curve', 'yield spread', 'term premium'],
+  volatility_shock: ['volatility', 'vix', 'vol spike'],
+  safe_haven_bid: ['safe haven', 'gold', 'yen', 'swiss franc', 'treasur'],
+  policy_rate_pressure: ['policy rate', 'central bank', 'rate hike', 'rate cut', 'monetary'],
+  fx_stress: ['fx stress', 'currency stress', 'exchange rate volatil'],
+  inflation_impulse: ['inflation', 'price spike', 'cost push', 'cpi'],
+  liquidity_withdrawal: ['liquidity', 'credit crunch', 'funding stress'],
+  cyber_cost_repricing: ['cyber', 'hack', 'ransomware', 'infrastructure attack'],
+  infrastructure_capacity_loss: ['infrastructure', 'capacity loss', 'outage', 'blackout'],
+  defense_repricing: ['defense spend', 'arms', 'rearmament', 'weapon'],
+  demand_shock: ['demand shock', 'demand collapse', 'recession', 'slowdown'],
+};
+
+function matchesBucket(simPath, targetBucket) {
+  if (!targetBucket || !simPath) return false;
+  const text = `${simPath.label || ''} ${simPath.summary || ''}`.toLowerCase();
+  const keywords = BUCKET_KEYWORDS[targetBucket] || [targetBucket.replace(/_/g, ' ')];
+  return keywords.some((kw) => text.includes(kw));
+}
+
+function matchesChannel(simPath, channel) {
+  if (!channel || !simPath) return false;
+  const text = `${simPath.label || ''} ${simPath.summary || ''}`.toLowerCase();
+  const keywords = CHANNEL_KEYWORDS[channel] || [channel.replace(/_/g, ' ')];
+  return keywords.some((kw) => text.includes(kw));
+}
+
+const NEGATION_TERMS = ['ceasefire', 'reopen', 'reopened', 'resolv', 'diplomatic solution', 'withdrawal', 'de-escalat', 'deescalat', 'restored', 'stabiliz', 'lifted', 'normaliz', 'agreement'];
+const SIMULATION_MERGE_ACCEPT_THRESHOLD = 0.50;
+const SIMULATION_ELIGIBILITY_RANK_THRESHOLD = 0.40;
+
+/**
+ * @param {string} invalidator
+ * @param {ExpandedPath} expandedPath
+ * @param {boolean} [fromSimulation]
+ * @returns {boolean}
+ */
+function contradictsPremise(invalidator, expandedPath, fromSimulation = false) {
+  if (!invalidator || typeof invalidator !== 'string') return false;
+  const text = invalidator.toLowerCase();
+  if (!fromSimulation) {
+    const hasNegation = NEGATION_TERMS.some((t) => text.includes(t));
+    if (!hasNegation) return false;
+  }
+  const routeKey = expandedPath?.candidate?.routeFacilityKey || '';
+  const commodityKey = (expandedPath?.candidate?.commodityKey || '').replace(/_/g, ' ');
+  if (routeKey || commodityKey) {
+    return (
+      (routeKey && text.includes(routeKey.toLowerCase())) ||
+      (commodityKey && text.includes(commodityKey.toLowerCase()))
+    );
+  }
+  // Non-maritime: match on stateKind and bucket keywords so macro/political/cyber
+  // theaters can also receive negative adjustments from simulation invalidators.
+  const stateKind = expandedPath?.candidate?.stateKind || '';
+  const bucket = expandedPath?.direct?.targetBucket || expandedPath?.candidate?.topBucketId || '';
+  const subjectKeywords = [...stateKind.toLowerCase().split('_'), ...bucket.toLowerCase().split('_')]
+    .filter((w) => w.length >= 4);
+  return subjectKeywords.some((kw) => text.includes(kw));
+}
+
+/**
+ * @param {string} stabilizer
+ * @param {CandidatePacket} candidatePacket
+ * @returns {boolean}
+ */
+function negatesDisruption(stabilizer, candidatePacket) {
+  if (!stabilizer || typeof stabilizer !== 'string') return false;
+  const text = stabilizer.toLowerCase();
+  const hasNegation = NEGATION_TERMS.some((t) => text.includes(t));
+  if (!hasNegation) return false;
+  const routeKey = candidatePacket?.routeFacilityKey || '';
+  const commodityKey = (candidatePacket?.commodityKey || '').replace(/_/g, ' ');
+  if (routeKey || commodityKey) {
+    return (
+      (routeKey && text.includes(routeKey.toLowerCase())) ||
+      (commodityKey && text.includes(commodityKey.toLowerCase()))
+    );
+  }
+  // Non-maritime: match on stateKind and bucket keywords.
+  const stateKind = candidatePacket?.stateKind || '';
+  const bucket = candidatePacket?.marketContext?.topBucketId || candidatePacket?.topBucketId || '';
+  const subjectKeywords = [...stateKind.toLowerCase().split('_'), ...bucket.toLowerCase().split('_')]
+    .filter((w) => w.length >= 4);
+  return subjectKeywords.some((kw) => text.includes(kw));
+}
+
+/**
+ * @param {ExpandedPath} expandedPath
+ * @param {TheaterResult} simTheaterResult
+ * @param {CandidatePacket} candidatePacket
+ * @returns {{ adjustment: number; details: SimulationAdjustmentDetail }}
+ */
+function computeSimulationAdjustment(expandedPath, simTheaterResult, candidatePacket) {
+  let adjustment = 0;
+  const details = { bucketChannelMatch: false, actorOverlapCount: 0, invalidatorHit: false, stabilizerHit: false, resolvedChannel: '', channelSource: 'none', candidateActorCount: 0, actorSource: 'none', simPathConfidence: 1.0 };
+
+  const { topPaths = [], invalidators = [], stabilizers = [] } = simTheaterResult || {};
+  const pathBucket = expandedPath?.direct?.targetBucket
+    || candidatePacket?.marketContext?.topBucketId
+    || candidatePacket?.topBucketId
+    || '';
+  const directChannel = expandedPath?.direct?.channel || '';
+  const marketChannel = candidatePacket?.marketContext?.topChannel || candidatePacket?.topChannel || '';
+  const pathChannel = Object.hasOwn(CHANNEL_KEYWORDS, directChannel)
+    ? directChannel
+    : Object.hasOwn(CHANNEL_KEYWORDS, marketChannel)
+      ? marketChannel
+      : '';
+  const rawStateActors = Array.isArray(candidatePacket?.stateSummary?.actors)
+    ? candidatePacket.stateSummary.actors
+    : [];
+  let candidateActors;
+  let actorSrc;
+  if (rawStateActors.length > 0) {
+    candidateActors = [...new Set(rawStateActors.map(normalizeActorName).filter(Boolean))];
+    actorSrc = 'stateSummary';
+  } else {
+    const assetNames = [];
+    for (const hop of [expandedPath.direct, expandedPath.second, expandedPath.third]) {
+      if (!hop) continue;
+      for (const a of hop.affectedAssets || []) {
+        const n = normalizeActorName(a);
+        if (n) assetNames.push(n);
+      }
+    }
+    candidateActors = [...new Set(assetNames)];
+    actorSrc = candidateActors.length > 0 ? 'affectedAssets' : 'none';
+  }
+  details.candidateActorCount = candidateActors.length;
+  details.actorSource = actorSrc;
+  details.resolvedChannel = pathChannel;
+  details.channelSource = Object.hasOwn(CHANNEL_KEYWORDS, directChannel)
+    ? 'direct'
+    : Object.hasOwn(CHANNEL_KEYWORDS, marketChannel)
+      ? 'market'
+      : 'none';
+
+  const bucketChannelMatch = topPaths.find(
+    (sp) => matchesBucket(sp, pathBucket) && matchesChannel(sp, pathChannel)
+  );
+  if (bucketChannelMatch) {
+    // Scale bonuses by sim path confidence.
+    // Absent or non-finite → 1.0 (conservative fallback for legacy LLM output without this field).
+    // Explicit 0 → simConf=0, no positive adjustment (if no negatives fire, adj=0 and early exit).
+    const rawConf = bucketChannelMatch.confidence;
+    const simConf = (typeof rawConf !== 'number' || !Number.isFinite(rawConf))
+      ? 1.0
+      : Math.min(1, Math.max(0, rawConf));
+    adjustment += +parseFloat((0.08 * simConf).toFixed(3));
+    details.bucketChannelMatch = true;
+    details.simPathConfidence = simConf;
+    const simActors = new Set((Array.isArray(bucketChannelMatch.keyActors) ? bucketChannelMatch.keyActors : []).map(normalizeActorName));
+    const overlap = candidateActors.filter((a) => simActors.has(a));
+    details.actorOverlapCount = overlap.length;
+    // Overlap bonus fires only when both sides have named geo-political actors.
+    // Macro-financial theaters with role-based stateSummary.actors (e.g. "Commodity traders",
+    // "Central banks") will have actorOverlapCount=0 — this is expected, not a bug.
+    if (overlap.length >= 2) {
+      adjustment += +parseFloat((0.04 * simConf).toFixed(3));
+    }
+  }
+
+  for (const inv of invalidators) {
+    if (contradictsPremise(inv, expandedPath, true)) {
+      adjustment -= 0.12;
+      details.invalidatorHit = true;
+      break;
+    }
+  }
+
+  for (const stab of stabilizers) {
+    if (negatesDisruption(stab, candidatePacket)) {
+      adjustment -= 0.15;
+      details.stabilizerHit = true;
+      break;
+    }
+  }
+
+  return { adjustment: +adjustment.toFixed(3), details };
+}
+
+/**
+ * @param {object} evaluation
+ * @param {SimulationOutcome} simulationOutcome
+ * @param {CandidatePacket[]} candidatePackets
+ * @param {object} snapshot
+ * @param {object | null} priorWorldState
+ * @returns {{ evaluation: object; simulationEvidence: SimulationEvidence | null }}
+ */
+function applySimulationMerge(evaluation, simulationOutcome, candidatePackets, snapshot, priorWorldState) {
+  if (!simulationOutcome?.theaterResults?.length) {
+    return { evaluation, simulationEvidence: null };
+  }
+
+  const adjustments = [];
+  let anyPathChanged = false;
+
+  const simByTheater = new Map(
+    (simulationOutcome.theaterResults || []).map((t) => [t.candidateStateId || t.theaterId, t])
+  );
+
+  const selectedPaths = evaluation.selectedPaths || [];
+  const rejectedPaths = evaluation.rejectedPaths || [];
+  const allPaths = [...selectedPaths, ...rejectedPaths];
+
+  for (const path of allPaths) {
+    if (path.type !== 'expanded') continue;
+    // Clear stale simulation metadata from prior cycles before re-evaluating.
+    // Must happen before any `continue` so paths with no matching theater or zero
+    // adjustment don't retain fields written by a different simulation run.
+    delete path.simulationAdjustment;
+    delete path.mergedAcceptanceScore;
+    delete path.simulationSignal;
+    delete path.demotedBySimulation;
+    delete path.promotedBySimulation;
+
+    const simResult = simByTheater.get(path.candidateStateId);
+    if (!simResult) continue;
+
+    const candidatePacket = (candidatePackets || []).find((c) => c.candidateStateId === path.candidateStateId);
+    if (!candidatePacket) continue;
+
+    const { adjustment, details } = computeSimulationAdjustment(path, simResult, candidatePacket);
+    if (adjustment === 0) continue;
+
+    const mergedAcceptanceScore = +clampUnitInterval(path.acceptanceScore + adjustment).toFixed(3);
+    const wasAccepted = selectedPaths.includes(path);
+
+    adjustments.push({
+      pathId: path.pathId,
+      candidateStateId: path.candidateStateId,
+      originalAcceptanceScore: path.acceptanceScore,
+      simulationAdjustment: adjustment,
+      mergedAcceptanceScore,
+      details,
+      wasAccepted,
+      nowAccepted: mergedAcceptanceScore >= SIMULATION_MERGE_ACCEPT_THRESHOLD,
+    });
+
+    path.simulationAdjustment = adjustment;
+    path.mergedAcceptanceScore = mergedAcceptanceScore;
+    path.simulationSignal = {
+      backed: adjustment > 0,
+      adjustmentDelta: adjustment,
+      channelSource: details.channelSource,
+      demoted: wasAccepted && mergedAcceptanceScore < SIMULATION_MERGE_ACCEPT_THRESHOLD,
+      simPathConfidence: details.simPathConfidence,
+    };
+
+    if (wasAccepted && mergedAcceptanceScore < SIMULATION_MERGE_ACCEPT_THRESHOLD) {
+      path.demotedBySimulation = true;
+      anyPathChanged = true;
+    } else if (!wasAccepted && mergedAcceptanceScore >= SIMULATION_MERGE_ACCEPT_THRESHOLD
+        // Guard: only promote paths that passed structural scoring (acceptanceScore > 0).
+        // Paths rejected by structural validation have acceptanceScore === 0 and should not
+        // be promoted by simulation evidence alone — simulation adjusts, not bypasses, structure.
+        && path.acceptanceScore > 0) {
+      path.promotedBySimulation = true;
+      anyPathChanged = true;
+    }
+  }
+
+  if (anyPathChanged) {
+    const newSelected = allPaths.filter((p) => {
+      if (p.type !== 'expanded') return selectedPaths.includes(p);
+      if (p.demotedBySimulation) return false;
+      if (p.promotedBySimulation) return true;
+      return selectedPaths.includes(p);
+    });
+    const newRejected = allPaths.filter((p) => !newSelected.includes(p));
+    const newSelectedExpanded = newSelected.filter((p) => p.type === 'expanded');
+
+    if (newSelectedExpanded.length > 0 && evaluation.status === 'completed_no_material_change') {
+      // Build bundle and world state before mutating evaluation to avoid partial state on error.
+      const acceptedBundle = buildImpactExpansionBundleFromPaths(newSelectedExpanded, candidatePackets, {
+        source: 'deep_selected',
+        parseStage: 'accepted_paths',
+        parseMode: 'accepted_paths',
+      });
+      const deepWorldState = annotateDeepForecastOrigins(
+        buildDeepWorldStateFromSnapshot(snapshot, priorWorldState, acceptedBundle, {
+          status: 'completed',
+          selectedStateIds: newSelectedExpanded.map((p) => p.candidateStateId),
+          eligibleStateCount: (candidatePackets || []).length,
+          selectedPathCount: newSelectedExpanded.length,
+          replacedFastRun: true,
+        }),
+        newSelectedExpanded,
+      );
+      evaluation.selectedPaths = newSelected;
+      evaluation.rejectedPaths = newRejected;
+      evaluation.status = 'completed';
+      evaluation.impactExpansionBundle = acceptedBundle;
+      evaluation.deepWorldState = deepWorldState;
+    } else if (newSelectedExpanded.length === 0 && evaluation.status === 'completed') {
+      evaluation.selectedPaths = newSelected;
+      evaluation.rejectedPaths = newRejected;
+      evaluation.status = 'completed_no_material_change';
+      evaluation.deepWorldState = null;
+    } else if (evaluation.status === 'completed') {
+      // CASE 3: Partial change within a completed run — at least one expanded path was
+      // promoted or demoted, but the set of selected expanded paths is non-empty.
+      // Status stays 'completed'; rebuild bundle and world state to reflect the updated path set.
+      const acceptedBundle = buildImpactExpansionBundleFromPaths(newSelectedExpanded, candidatePackets, {
+        source: 'deep_selected',
+        parseStage: 'accepted_paths',
+        parseMode: 'accepted_paths',
+      });
+      const deepWorldState = annotateDeepForecastOrigins(
+        buildDeepWorldStateFromSnapshot(snapshot, priorWorldState, acceptedBundle, {
+          status: 'completed',
+          selectedStateIds: newSelectedExpanded.map((p) => p.candidateStateId),
+          eligibleStateCount: (candidatePackets || []).length,
+          selectedPathCount: newSelectedExpanded.length,
+          replacedFastRun: true,
+        }),
+        newSelectedExpanded,
+      );
+      evaluation.selectedPaths = newSelected;
+      evaluation.rejectedPaths = newRejected;
+      evaluation.impactExpansionBundle = acceptedBundle;
+      evaluation.deepWorldState = deepWorldState;
+    }
+  }
+
+  const simulationEvidence = {
+    outcomeRunId: simulationOutcome.runId || '',
+    isCurrentRun: simulationOutcome.isCurrentRun || false,
+    theaterCount: (simulationOutcome.theaterResults || []).length,
+    adjustments,
+    pathsPromoted: adjustments.filter((a) => !a.wasAccepted && a.nowAccepted).length,
+    pathsDemoted: adjustments.filter((a) => a.wasAccepted && !a.nowAccepted).length,
+    pathsUnchanged: adjustments.filter((a) => a.wasAccepted === a.nowAccepted).length,
+  };
+
+  return { evaluation, simulationEvidence };
+}
+
 function findDuplicateStateUnitLabels(stateUnits = []) {
   const counts = new Map();
   for (const unit of stateUnits || []) {
@@ -11633,6 +12125,7 @@ function buildForecastTraceArtifacts(data, context = {}, config = {}) {
     manifest.runId,
   );
   const pathScorecards = buildDeepPathScorecardsPayload(data, manifest.runId);
+  const forecastEval = buildForecastEvalPayload(data);
 
   return {
     prefix,
@@ -11648,6 +12141,7 @@ function buildForecastTraceArtifacts(data, context = {}, config = {}) {
     deepWorldStateKey,
     runStatusKey,
     forecastEvalKey: artifactKeys.forecastEvalKey,
+    forecastEval,
     runStatus,
     impactExpansionDebugKey,
     impactExpansionDebug,
@@ -11792,6 +12286,12 @@ async function writeForecastTraceArtifacts(data, context = {}) {
       kind: 'path_scorecards',
     });
   }
+  if (artifacts.forecastEval) {
+    await putR2JsonObject(storageConfig, artifacts.forecastEvalKey, artifacts.forecastEval, {
+      runid: String(artifacts.manifest.runId || ''),
+      kind: 'forecast_eval',
+    });
+  }
   await Promise.all(
     artifacts.forecasts.map((item, index) => putR2JsonObject(storageConfig, item.key, item.payload, {
       runid: String(artifacts.manifest.runId || ''),
@@ -11818,7 +12318,9 @@ async function writeForecastTraceArtifacts(data, context = {}) {
     quality: artifacts.summary.quality,
     worldStateSummary: artifacts.summary.worldStateSummary,
   };
-  await writeForecastTracePointer(pointer);
+  if (!context.skipPointer) {
+    await writeForecastTracePointer(pointer);
+  }
   return pointer;
 }
 
@@ -11854,16 +12356,19 @@ async function writeDeepForecastSnapshot(snapshot, _context = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Simulation Package Export (Phase 1: maritime chokepoint + energy/logistics)
+// Simulation Package Export — theater-agnostic eligibility
 // ---------------------------------------------------------------------------
 
-function isMaritimeChokeEnergyCandidate(candidate) {
-  const routeKey = candidate.routeFacilityKey || '';
-  if (!routeKey || !Object.prototype.hasOwnProperty.call(CHOKEPOINT_MARKET_REGIONS, routeKey)) return false;
-  const bucketArr = candidate.marketBucketIds || [];
-  const topBucket = candidate.marketContext?.topBucketId || '';
-  return bucketArr.includes('energy') || bucketArr.includes('freight') || topBucket === 'energy' || topBucket === 'freight'
-    || SIMULATION_ENERGY_COMMODITY_KEYS.has(candidate.commodityKey || '');
+function isSimulationEligible(candidate) {
+  const score = parseFloat(candidate.rankingScore || 0);
+  if (score < SIMULATION_ELIGIBILITY_RANK_THRESHOLD) return false;
+  // Accept both full-candidate shape (marketBucketIds / marketContext.topBucketId)
+  // and theater-object shape (topBucketId only) — both appear in call sites.
+  const hasBucket =
+    (candidate.marketBucketIds?.length > 0) ||
+    !!(candidate.topBucketId) ||
+    !!(candidate.marketContext?.topBucketId);
+  return hasBucket && !!(candidate.candidateStateId);
 }
 
 function mapActorCategoryToEntityClass(category, domains = []) {
@@ -11889,7 +12394,7 @@ function inferEntityClassFromName(name) {
 function buildSimulationRequirementText(theater, candidate) {
   const label = sanitizeForPrompt(theater.label) || theater.dominantRegion || 'unknown theater';
   const route = sanitizeForPrompt(theater.routeFacilityKey || theater.dominantRegion);
-  const stateKind = sanitizeForPrompt(theater.stateKind) || 'disruption';
+  const stateKind = theater.stateKind || 'cross_domain_pressure';
   const commodity = theater.commodityKey ? ` (${theater.commodityKey.replace(/_/g, ' ')})` : '';
   const bucket = theater.topBucketId || 'market';
   const rawChannel = theater.topChannel ? sanitizeForPrompt(theater.topChannel) : '';
@@ -11897,7 +12402,26 @@ function buildSimulationRequirementText(theater, candidate) {
   const macroRegion = theater.macroRegions?.[0] || theater.dominantRegion;
   const critTypes = (candidate.criticalSignalTypes || []).slice(0, 3).map((t) => sanitizeForPrompt(t).replace(/_/g, ' ')).join(', ');
   const signalContext = critTypes ? ` Active signals: ${critTypes}.` : '';
-  return `Simulate how a ${label} (${stateKind} at ${route}${commodity}) propagates through state behavior, shipping behavior, ${macroRegion} importer response, and ${bucket} market sentiment${channel} over the next 72 hours.${signalContext}`;
+
+  if (stateKind === 'maritime_disruption') {
+    return `Simulate how a ${label} (${stateKind} at ${route}${commodity}) propagates through state behavior, shipping behavior, ${macroRegion} importer response, and ${bucket} market sentiment${channel} over the next 72 hours.${signalContext}`;
+  }
+  if (stateKind === 'market_repricing') {
+    return `Simulate how ${label}${commodity} propagates through credit conditions, ${macroRegion} ${bucket} market repricing, FX stress on import-dependent economies, and second-order commodity demand${channel} over the next 72 hours.${signalContext}`;
+  }
+  if (stateKind === 'political_instability' || stateKind === 'governance_pressure') {
+    return `Simulate how ${label} propagates through government policy response, trade posture, investor sentiment, ${macroRegion} capital flows, and downstream ${bucket} market pressure${channel} over the next 72 hours.${signalContext}`;
+  }
+  if (stateKind === 'security_escalation') {
+    return `Simulate how ${label} in ${macroRegion} propagates through state military posture, logistics disruption, regional stability, and ${bucket} market reaction${channel} over the next 72 hours.${signalContext}`;
+  }
+  if (stateKind === 'infrastructure_fragility') {
+    return `Simulate how ${label} (${route}${commodity}) propagates through supply chain capacity, logistics operator response, ${macroRegion} production continuity, and ${bucket} market conditions${channel} over the next 72 hours.${signalContext}`;
+  }
+  if (stateKind === 'cyber_pressure') {
+    return `Simulate how ${label} propagates through systems availability, financial network continuity, ${macroRegion} institutional response, and ${bucket} market confidence${channel} over the next 72 hours.${signalContext}`;
+  }
+  return `Simulate how ${label}${commodity} in ${macroRegion} propagates through state behavior, market conditions, and ${bucket} sentiment${channel} over the next 72 hours.${signalContext}`;
 }
 
 function buildSimulationPackageEntities(selectedTheaters, candidates, actorRegistry) {
@@ -12047,17 +12571,18 @@ function buildSimulationPackageEventSeeds(selectedTheaters, candidates) {
 }
 
 function buildSimulationPackageConstraints(selectedTheaters, candidates) {
-  const constraints = [];
+  const result = {};
   let idx = 0;
 
   for (const theater of selectedTheaters) {
     const candidate = candidates.find((c) => c.candidateStateId === theater.candidateStateId);
     if (!candidate) continue;
     const src = `candidate:${theater.candidateStateId}`;
+    const theaterConstraints = [];
 
     if (theater.routeFacilityKey) {
       const hardDisruption = Number(candidate.marketContext?.criticalSignalLift || 0) >= 0.25;
-      constraints.push({
+      theaterConstraints.push({
         constraintId: `c-${++idx}`,
         theaterId: theater.theaterId,
         class: 'route_chokepoint_status',
@@ -12068,7 +12593,7 @@ function buildSimulationPackageConstraints(selectedTheaters, candidates) {
     }
 
     if (theater.commodityKey) {
-      constraints.push({
+      theaterConstraints.push({
         constraintId: `c-${++idx}`,
         theaterId: theater.theaterId,
         class: 'commodity_exposure',
@@ -12079,7 +12604,7 @@ function buildSimulationPackageConstraints(selectedTheaters, candidates) {
     }
 
     if (theater.topBucketId && theater.topChannel) {
-      constraints.push({
+      theaterConstraints.push({
         constraintId: `c-${++idx}`,
         theaterId: theater.theaterId,
         class: 'market_admissibility',
@@ -12091,7 +12616,7 @@ function buildSimulationPackageConstraints(selectedTheaters, candidates) {
 
     const contradictionScore = Number(candidate.marketContext?.contradictionScore || 0);
     if (contradictionScore >= 0.1) {
-      constraints.push({
+      theaterConstraints.push({
         constraintId: `c-${++idx}`,
         theaterId: theater.theaterId,
         class: 'known_invalidators',
@@ -12100,48 +12625,119 @@ function buildSimulationPackageConstraints(selectedTheaters, candidates) {
         source: `${src}:contradictionScore=${contradictionScore}`,
       });
     }
+
+    const bucketArr = candidate.marketBucketIds || [];
+    const topBucket = theater.topBucketId || candidate.marketContext?.topBucketId || '';
+    const MACRO_FIN_BUCKETS = ['rates_inflation', 'sovereign_risk', 'fx_stress'];
+    if (MACRO_FIN_BUCKETS.some((b) => bucketArr.includes(b) || topBucket === b) && !theater.routeFacilityKey) {
+      theaterConstraints.push({
+        constraintId: `c-${++idx}`,
+        theaterId: theater.theaterId,
+        class: 'macro_financial_posture',
+        statement: `${theater.label || theater.candidateStateId} operates under existing ${topBucket || 'macro'} conditions; simulation must route consequences through ${(theater.topChannel || 'market channel').replace(/_/g, ' ')} and must not exceed bounds set by current structural ${topBucket || 'market'} state.`,
+        hard: false,
+        source: `${src}:topBucketId=${topBucket}:topChannel=${theater.topChannel}`,
+      });
+    }
+
+    if (!theater.routeFacilityKey && !theater.commodityKey && theater.stateKind !== 'market_repricing') {
+      theaterConstraints.push({
+        constraintId: `c-${++idx}`,
+        theaterId: theater.theaterId,
+        class: 'structural_event_premise',
+        statement: `${theater.label || theater.candidateStateId} (${theater.stateKind || 'unknown'}) is the primary disruption premise; simulation must not invent a physical chokepoint or commodity disruption that is not evidenced in the theater state.`,
+        hard: true,
+        source: `${src}:stateKind=${theater.stateKind}`,
+      });
+    }
+
+    result[theater.theaterId] = theaterConstraints;
   }
 
-  return constraints;
+  return result;
+}
+
+function buildEvalTargetQuestions(theater, macroRegion) {
+  const stateKind = theater.stateKind || '';
+  const bucket = theater.topBucketId || 'market';
+  const label = theater.label || theater.candidateStateId;
+  const route = theater.routeFacilityKey || theater.dominantRegion;
+  const commodity = theater.commodityKey ? ` and ${theater.commodityKey.replace(/_/g, ' ')} flows` : '';
+
+  if (stateKind === 'maritime_disruption') {
+    return [
+      { pathType: 'escalation', question: `How does disruption at ${route}${commodity} escalate into a broader ${bucket} shock, and which actors accelerate it?` },
+      { pathType: 'containment', question: `What specific conditions contain the ${route} disruption before it crosses into ${bucket} repricing?` },
+      { pathType: 'market_cascade', question: `What are the 2nd and 3rd order economic consequences of disruption at ${route}? Model energy price direction ($/bbl or %), freight rate delta on affected trade lanes, downstream sector impacts (manufacturing, agriculture, consumer prices), and FX stress on import-dependent economies in ${macroRegion}.` },
+    ];
+  }
+  if (stateKind === 'market_repricing') {
+    return [
+      { pathType: 'escalation', question: `How does ${label} escalate through ${bucket} market conditions, and which institutional actors accelerate the repricing?` },
+      { pathType: 'containment', question: `What policy interventions or market signals contain the ${bucket} repricing before second-order spillovers materialize?` },
+      { pathType: 'market_cascade', question: `Model 2nd and 3rd order economic consequences: ${bucket.replace(/_/g, ' ')} direction, FX stress on import-dependent economies in ${macroRegion}, sovereign spread widening, and downstream sector demand compression.` },
+    ];
+  }
+  if (stateKind === 'political_instability' || stateKind === 'governance_pressure') {
+    return [
+      { pathType: 'escalation', question: `How does ${label} in ${macroRegion} escalate through government dysfunction, trade posture shifts, and investor confidence into ${bucket} pressure?` },
+      { pathType: 'containment', question: `What institutional stabilizers (coalition formation, international mediation, credible commitment signals) contain the political instability before market spillover?` },
+      { pathType: 'market_cascade', question: `Model 2nd and 3rd order economic consequences: capital flight from ${macroRegion}, FX stress, sovereign risk premium widening, and downstream trade disruption.` },
+    ];
+  }
+  if (stateKind === 'security_escalation') {
+    return [
+      { pathType: 'escalation', question: `How does ${label} in ${macroRegion} escalate through military posture changes, logistics disruption, and regional alliance dynamics into ${bucket} pressure?` },
+      { pathType: 'containment', question: `What deterrence signals, diplomatic channels, or de-escalation steps contain ${label} before it triggers broader market repricing?` },
+      { pathType: 'market_cascade', question: `Model 2nd and 3rd order economic consequences: regional risk premium, defense spending signals, logistics cost increases in ${macroRegion}, and ${bucket} market sentiment.` },
+    ];
+  }
+  if (stateKind === 'infrastructure_fragility') {
+    return [
+      { pathType: 'escalation', question: `How does ${label}${commodity} at ${route} escalate through supply chain capacity loss, logistics rerouting, and production continuity gaps into ${bucket} pressure?` },
+      { pathType: 'containment', question: `What restoration timelines or alternative routing contain the infrastructure disruption before ${bucket} markets reprice?` },
+      { pathType: 'market_cascade', question: `Model 2nd and 3rd order economic consequences: production shortfall in ${macroRegion}, logistics cost increases, downstream manufacturing disruptions, and ${bucket} supply gap.` },
+    ];
+  }
+  if (stateKind === 'cyber_pressure') {
+    return [
+      { pathType: 'escalation', question: `How does ${label} escalate through systems availability failures, financial network disruption, and institutional confidence loss into ${bucket} pressure?` },
+      { pathType: 'containment', question: `What technical containment, incident response timelines, or redundancy activation limits the ${label} impact on ${bucket} conditions?` },
+      { pathType: 'market_cascade', question: `Model 2nd and 3rd order economic consequences: financial settlement disruption in ${macroRegion}, confidence shock on ${bucket} participants, and downstream sector operational losses.` },
+    ];
+  }
+  // fallback
+  return [
+    { pathType: 'escalation', question: `How does ${label} in ${macroRegion} escalate through actor behavior and institutional response into broader ${bucket} pressure, and who accelerates it?` },
+    { pathType: 'containment', question: `What conditions or interventions contain ${label} before it crosses into sustained ${bucket} repricing?` },
+    { pathType: 'market_cascade', question: `Model 2nd and 3rd order economic consequences of ${label}: ${bucket.replace(/_/g, ' ')} conditions, FX stress in ${macroRegion}, downstream sector impacts, and actor-driven amplification.` },
+  ];
 }
 
 function buildSimulationPackageEvaluationTargets(selectedTheaters, candidates) {
-  return selectedTheaters.map((theater) => {
+  const result = {};
+  for (const theater of selectedTheaters) {
     const candidate = candidates.find((c) => c.candidateStateId === theater.candidateStateId);
     if (!candidate) {
       console.warn(`[SimulationPackage] No candidate for theaterId=${theater.theaterId} (evaluationTargets)`);
     }
-    const route = theater.routeFacilityKey || theater.dominantRegion;
-    const commodity = theater.commodityKey ? ` and ${theater.commodityKey.replace(/_/g, ' ')} flows` : '';
     const bucket = theater.topBucketId || 'market';
-    const channel = theater.topChannel ? theater.topChannel.replace(/_/g, ' ') : 'transmission';
     const macroRegion = theater.macroRegions?.[0] || theater.dominantRegion;
     const actors = (candidate?.stateSummary?.actors || []).slice(0, 3).join(', ') || 'key actors';
-    return {
+    const isMaritimeOrInfra = theater.routeFacilityKey && (theater.stateKind === 'maritime_disruption' || theater.stateKind === 'infrastructure_fragility');
+    result[theater.theaterId] = {
       theaterId: theater.theaterId,
-      requiredPaths: [
-        {
-          pathType: 'escalation',
-          question: `How does disruption at ${route}${commodity} escalate into a broader ${bucket} shock, and which actors accelerate it?`,
-        },
-        {
-          pathType: 'containment',
-          question: `What specific conditions contain the ${route} disruption before it crosses into ${bucket} repricing?`,
-        },
-        {
-          pathType: 'spillover',
-          question: `How does stress at ${route} spill from ${macroRegion} into adjacent markets or political theaters via ${channel}?`,
-        },
-      ],
+      requiredPaths: buildEvalTargetQuestions(theater, macroRegion),
       requiredOutputs: ['key_invalidators', 'timing_markers', 'actor_response_summary'],
       timingMarkers: [
-        { label: 'T+24h', description: `Initial state and logistics actor response to ${theater.label}` },
+        { label: 'T+24h', description: `Initial state and ${isMaritimeOrInfra ? 'logistics ' : ''}actor response to ${theater.label}` },
         { label: 'T+48h', description: `${bucket} market repricing and policy signals emerging from ${macroRegion}` },
         { label: 'T+72h', description: 'Stabilization or escalation bifurcation point' },
       ],
       actorResponseFocus: actors,
     };
-  });
+  }
+  return result;
 }
 
 function buildSimulationStructuralWorld(selectedTheaters, { stateUnits, worldSignals, marketTransmission, marketState, situationClusters, situationFamilies }) {
@@ -12176,14 +12772,25 @@ function buildSimulationStructuralWorld(selectedTheaters, { stateUnits, worldSig
 }
 
 function buildSimulationPackageFromDeepSnapshot(snapshot, priorWorldState = null) {
-  const candidates = (snapshot.impactExpansionCandidates || []).filter(isMaritimeChokeEnergyCandidate);
+  const candidates = (snapshot.impactExpansionCandidates || []).filter(isSimulationEligible);
   if (candidates.length === 0) return null;
-  const top = candidates.slice(0, 3);
+  const usedGroups = new Set();
+  const top = [];
+  for (const c of candidates) {
+    const marketRegion = CHOKEPOINT_MARKET_REGIONS[c.routeFacilityKey] || c.dominantRegion || '';
+    const group = getTheaterGeoGroup(marketRegion);
+    if (!usedGroups.has(group)) {
+      usedGroups.add(group);
+      top.push(c);
+      if (top.length === 3) break;
+    }
+  }
+  if (top.length === 0) return null;
 
   const selectedTheaters = top.map((c, i) => ({
     theaterId: `theater-${i + 1}`,
     candidateStateId: c.candidateStateId,
-    label: c.candidateStateLabel || c.dominantRegion || 'unknown theater',
+    label: (c.candidateStateLabel || c.dominantRegion || 'unknown theater').replace(/\s*\([^)]+\)\s*$/, '').trim(),
     stateKind: c.stateKind,
     dominantRegion: c.dominantRegion,
     macroRegions: c.macroRegions,
@@ -13531,39 +14138,9 @@ function extractStructuredLlmPayload(text) {
   };
 }
 
-function extractFirstJsonArray(text) {
-  const start = text.indexOf('[');
-  if (start === -1) return '';
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (char === '[') depth += 1;
-    if (char === ']') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return text.slice(start);
-}
-
 function tryParseStructuredCandidate(candidate) {
   try {
-    const parsed = JSON.parse(candidate);
+    const parsed = JSON.parse(cleanJsonText(candidate));
     if (Array.isArray(parsed)) return { items: parsed, stage: 'direct_array' };
     if (Array.isArray(parsed?.items)) return { items: parsed.items, stage: 'object_items' };
     if (Array.isArray(parsed?.scenarios)) return { items: parsed.scenarios, stage: 'object_scenarios' };
@@ -13574,7 +14151,7 @@ function tryParseStructuredCandidate(candidate) {
       const partial = candidate.slice(bracketIdx);
       for (const suffix of ['"}]', '}]', '"]', ']']) {
         try {
-          const repaired = JSON.parse(partial + suffix);
+          const repaired = JSON.parse(cleanJsonText(partial + suffix));
           if (Array.isArray(repaired)) return { items: repaired, stage: 'repaired_array' };
         } catch {
           // continue
@@ -13702,6 +14279,7 @@ async function callForecastLLM(systemPrompt, userPrompt, options = {}) {
 }
 
 async function redisSet(url, token, key, data, ttlSeconds) {
+  if (_testRedisStore) { _testRedisStore[key] = JSON.parse(JSON.stringify(data)); return; }
   try {
     await fetch(url, {
       method: 'POST',
@@ -14266,6 +14844,38 @@ async function enrichScenariosWithLLM(predictions) {
   return enrichmentMeta;
 }
 
+async function updateEmaWindows(inputs, url, token) {
+  let priorWindows = new Map();
+  try {
+    const raw = inputs.emaWindowsRaw;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      priorWindows = new Map(Object.entries(parsed));
+    }
+  } catch { /* cold start */ }
+
+  const ucdpEvents = Array.isArray(inputs.ucdpEvents) ? inputs.ucdpEvents : (inputs.ucdpEvents?.events ?? []);
+  const acledEvents = inputs.acledEvents ?? [];
+
+  const updatedWindows = computeEmaWindows(priorWindows, acledEvents, ucdpEvents);
+  const riskScores = computeRisk24h(updatedWindows);
+
+  const windowsObj = Object.fromEntries(updatedWindows);
+  const ttl = 26 * 3600;
+  await redisCommand(url, token, ['SET', 'conflict:ema-windows:v1', JSON.stringify(windowsObj), 'EX', ttl])
+    .catch(err => console.warn(`  [EMA] Failed to persist windows: ${err.message}`));
+  await redisCommand(url, token, ['SET', 'seed-meta:conflict:ema-windows:v1', JSON.stringify({ fetchedAt: new Date().toISOString(), recordCount: updatedWindows.size }), 'EX', ttl])
+    .catch(err => console.warn(`  [EMA] Failed to persist seed-meta: ${err.message}`));
+
+  const spikeCount = [...riskScores.values()].filter(r => r.velocitySpike).length;
+  if (spikeCount > 0) {
+    console.log(`  [EMA] ${spikeCount} velocity spike(s) detected:`,
+      [...riskScores.entries()].filter(([, v]) => v.velocitySpike).map(([k, v]) => `${k}(${v.risk24h})`).join(', '));
+  }
+
+  return riskScores;
+}
+
 // ── Main pipeline ──────────────────────────────────────────
 async function fetchForecasts() {
   await warmPingChokepoints();
@@ -14288,14 +14898,16 @@ async function fetchForecasts() {
   const prior = await readPriorPredictions();
 
   console.log('  Running domain detectors...');
+  const { url: emaUrl, token: emaToken } = getRedisCredentials();
+  const emaRiskScores = await updateEmaWindows(inputs, emaUrl, emaToken);
   const predictions = [
-    ...detectConflictScenarios(inputs),
+    ...detectConflictScenarios(inputs, emaRiskScores),
     ...detectMarketScenarios(inputs),
     ...detectSupplyChainScenarios(inputs),
     ...detectPoliticalScenarios(inputs),
     ...detectMilitaryScenarios(inputs),
     ...detectInfraScenarios(inputs),
-    ...detectUcdpConflictZones(inputs),
+    ...detectUcdpConflictZones(inputs, emaRiskScores),
     ...detectCyberScenarios(inputs),
     ...detectGpsJammingScenarios(inputs),
     ...detectFromPredictionMarkets(inputs),
@@ -14394,6 +15006,11 @@ async function fetchForecasts() {
   prepareForecastMetrics(predictions);
 
   rankForecastsForAnalysis(predictions);
+
+  // Apply simulation decorations from the prior simulation run (non-fatal if absent).
+  // Must run before enrichScenariosWithLLM so that simulationAdjustment is present when
+  // buildPublishedForecastPayload serializes the prediction.
+  await applySimulationDecorationsToForecasts(predictions);
 
   const enrichmentMeta = await enrichScenariosWithLLM(predictions);
   populateFallbackNarratives(predictions);
@@ -14578,6 +15195,28 @@ async function processDeepForecastTask(task = {}) {
     bundle,
   );
 
+  let simulationEvidence = null;
+  try {
+    const simulationOutcome = await fetchSimulationOutcomeForMerge(storageConfig, snapshot.runId || '');
+    if (simulationOutcome) {
+      const mergeResult = applySimulationMerge(
+        evaluation,
+        simulationOutcome,
+        snapshot.impactExpansionCandidates || [],
+        snapshot,
+        priorWorldState,
+      );
+      simulationEvidence = mergeResult.simulationEvidence;
+      // Awaited so patchPublishedForecastsWithSimDecorations completes before artifact writing
+      // continues. Fast path (~200ms Redis ops) so no meaningful delay to artifact export.
+      await writeSimulationDecorations(mergeResult, snapshot).catch((err) =>
+        console.warn(`  [SimulationDecorations] write failed (deep path): ${err.message}`)
+      );
+    }
+  } catch (err) {
+    console.warn('[SimulationMerge] Error during merge:', err.message);
+  }
+
   const baseDeepForecast = {
     ...(snapshot.deepForecast || {}),
     completedAt: new Date().toISOString(),
@@ -14593,6 +15232,7 @@ async function processDeepForecastTask(task = {}) {
     priorWorldStates: priorWorldState ? [priorWorldState] : [],
     impactExpansionBundle: evaluation.impactExpansionBundle || null,
     deepPathEvaluation: evaluation,
+    simulationEvidence,
   };
 
   // Compute convergence before artifact write so it can be returned to callers.
@@ -15037,14 +15677,20 @@ RULES:
 - narrative: 2–3 sentences grounding the thesis in the provided context. Cite specific signals by name (e.g. "Hormuz at CRITICAL risk", "VIX at 28", "Polymarket: 74% Iran conflict"). When prediction market odds are provided, weave them into the thesis.
 - risk_caveat: 1 sentence on the primary counter-thesis or risk
 - driver: 1–3 words naming the core geopolitical/macro driver (e.g. "Hormuz closure risk", "Fed pivot", "Taiwan tension")
+- transmission_chain: array of 2–4 objects, each with:
+  - node: short label (max 8 words) for this step in the causal chain
+  - impact_type: one of supply_disruption, demand_shift, earnings_risk, valuation_shift, policy_shift, capital_flow, sentiment_shift, contagion
+  - logic: 1 sentence (max 15 words) explaining what this step means for the trade thesis
+  The chain models the causal path from geopolitical event to price impact.
 - Cross-reference signals: if geopolitical escalation coincides with a commodity move in the opposite direction, flag the divergence and consider a HEDGE rather than directional call.
 - Prioritise cards by signal strength — lead with the highest-conviction setup.
 - NEVER use tickers not in the ALLOWED TICKERS list
 - NEVER invent data — use only what is provided
 - Do NOT include duplicate tickers across cards
+- NEVER write underscored_variable_names or internal keys in any field — always use plain English prose
 
 Respond with ONLY a JSON array:
-[{"ticker":"","name":"","direction":"","timeframe":"","confidence":"","title":"","narrative":"","risk_caveat":"","driver":""},...]`;
+[{"ticker":"","name":"","direction":"","timeframe":"","confidence":"","title":"","narrative":"","risk_caveat":"","driver":"","transmission_chain":[{"node":"","impact_type":"","logic":""}]},...]`;
 
 function buildMarketImplicationsContext(inputs) {
   const parts = [];
@@ -15052,13 +15698,15 @@ function buildMarketImplicationsContext(inputs) {
   // Pre-synthesised critical signals (highest-value input — already ranked by strength)
   const criticalSignals = inputs.criticalSignalBundle?.signals;
   if (Array.isArray(criticalSignals) && criticalSignals.length > 0) {
+    const humanizeType = t => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     const top = criticalSignals.slice(0, 8).map(s => {
+      const label = s.title || humanizeType(s.type || '');
       const strength = s.strength != null ? ` strength=${(s.strength * 100).toFixed(0)}%` : '';
       const conf = s.confidence != null ? ` conf=${(s.confidence * 100).toFixed(0)}%` : '';
       const domains = Array.isArray(s.domains) && s.domains.length ? ` [${s.domains.join(',')}]` : '';
       const evidence = Array.isArray(s.supportingEvidence) && s.supportingEvidence.length
         ? ` — ${s.supportingEvidence.slice(0, 2).join('; ')}` : '';
-      return `- ${sanitizeForPrompt(s.title || s.type || '')}${strength}${conf}${domains}${evidence}`;
+      return `- ${sanitizeForPrompt(label)}${strength}${conf}${domains}${evidence}`;
     });
     parts.push(`[CRITICAL INTELLIGENCE SIGNALS]\n${top.join('\n')}`);
   }
@@ -15178,14 +15826,19 @@ function buildMarketImplicationsContext(inputs) {
   return parts.length > 0 ? parts.join('\n\n') : 'No live world state available.';
 }
 
-function validateMarketImplications(cards) {
+const VALID_IMPACT_TYPES = new Set([
+  'supply_disruption', 'demand_shift', 'earnings_risk', 'valuation_shift',
+  'policy_shift', 'capital_flow', 'sentiment_shift', 'contagion',
+]);
+
+function validateMarketImplications(cards, allowedTickers = ALL_ALLOWED_TICKERS) {
   if (!Array.isArray(cards)) return [];
   const seen = new Set();
   const valid = [];
   for (const card of cards) {
     if (!card || typeof card !== 'object') continue;
     const ticker = typeof card.ticker === 'string' ? card.ticker.trim().toUpperCase() : '';
-    if (!ticker || !ALL_ALLOWED_TICKERS.has(ticker)) continue;
+    if (!ticker || !allowedTickers.has(ticker)) continue;
     if (seen.has(ticker)) continue;
     const direction = typeof card.direction === 'string' ? card.direction.trim().toUpperCase() : '';
     if (!['LONG', 'SHORT', 'HEDGE'].includes(direction)) continue;
@@ -15197,6 +15850,18 @@ function validateMarketImplications(cards) {
     if (title.length < 5) continue;
     const narrative = typeof card.narrative === 'string' ? card.narrative.trim().slice(0, 600) : '';
     if (narrative.length < 20) continue;
+    let chain = [];
+    if (Array.isArray(card.transmission_chain)) {
+      for (const step of card.transmission_chain.slice(0, 4)) {
+        if (!step || typeof step !== 'object') continue;
+        const node = typeof step.node === 'string' ? step.node.trim().slice(0, 80) : '';
+        const impactType = typeof step.impact_type === 'string' ? step.impact_type.trim().toLowerCase() : '';
+        const logic = typeof step.logic === 'string' ? step.logic.trim().slice(0, 120) : '';
+        if (node.length < 3 || !VALID_IMPACT_TYPES.has(impactType) || logic.length < 5) continue;
+        chain.push({ node, impact_type: impactType, logic });
+      }
+    }
+    if (chain.length === 1) chain = [];
     seen.add(ticker);
     valid.push({
       ticker,
@@ -15208,6 +15873,7 @@ function validateMarketImplications(cards) {
       narrative,
       risk_caveat: typeof card.risk_caveat === 'string' ? card.risk_caveat.trim().slice(0, 300) : '',
       driver: typeof card.driver === 'string' ? card.driver.trim().slice(0, 60) : '',
+      transmission_chain: chain,
     });
     if (valid.length >= 5) break;
   }
@@ -15241,13 +15907,36 @@ async function buildAndSeedMarketImplications(inputs) {
     return;
   }
 
-  const cards = validateMarketImplications(rawCards);
+  const { url, token } = getRedisCredentials();
+
+  // Extend the curated static allowlist with tradeable equity symbols from Redis.
+  // ALL_ALLOWED_TICKERS is always preserved (ETFs, defense, commodities, forex, rates, crypto).
+  // The live set adds stocks we have live price data for (e.g. NFLX, WMT) that are not in
+  // the static list, but only after stripping non-tradeable entries: index symbols (^GSPC,
+  // ^DJI) and foreign-exchange suffixes (RELIANCE.NS) are in the bootstrap for display only
+  // and must not be accepted as valid card tickers.
+  const liveTickerSet = await loadTickerSet(url, token);
+  let effectiveTickers;
+  if (liveTickerSet.size > 0) {
+    const tradeableLive = new Set(
+      [...liveTickerSet].filter(s => /^[A-Z]{1,6}(-[A-Z])?$/.test(s)),
+    );
+    effectiveTickers = new Set([...ALL_ALLOWED_TICKERS, ...tradeableLive]);
+    console.log(`  [MarketImplications] Extended allowlist: ${ALL_ALLOWED_TICKERS.size} static + ${tradeableLive.size} live equity symbols`);
+  } else {
+    effectiveTickers = ALL_ALLOWED_TICKERS;
+    console.warn('  [MarketImplications] Redis ticker set empty — using static allowlist only');
+  }
+
+  const cards = validateMarketImplications(rawCards, effectiveTickers);
   if (cards.length === 0) {
     console.warn('  [MarketImplications] All cards failed validation — skipping write');
     return;
   }
+  if (cards.length < rawCards.length) {
+    console.log(`  [MarketImplications] Validation: kept ${cards.length}/${rawCards.length} cards`);
+  }
 
-  const { url, token } = getRedisCredentials();
   const payload = { cards, generatedAt: new Date().toISOString(), model: result.model || '' };
   await redisSet(url, token, MARKET_IMPLICATIONS_KEY, payload, MARKET_IMPLICATIONS_TTL);
 
@@ -15307,7 +15996,8 @@ if (_isDirectRun) {
         const snapshotWrite = await writeDeepForecastSnapshot(snapshotPayload, { runId });
         if (snapshotWrite?.storageConfig && (data.impactExpansionCandidates || []).length > 0) {
           writeSimulationPackage(snapshotPayload, { storageConfig: snapshotWrite.storageConfig, priorWorldState: data.priorWorldState || null })
-            .catch((err) => console.warn(`  [SimulationPackage] Write failed: ${err.message}`));
+            .then(() => enqueueSimulationTask(runId))
+            .catch((err) => console.warn(`  [SimulationPackage] Write/enqueue failed: ${err.message}`));
         }
         if (deepForecast.status === 'queued' && (data.impactExpansionCandidates || []).length > 0) {
           if (snapshotWrite?.snapshotKey) {
@@ -15377,6 +16067,938 @@ if (_isDirectRun) {
       },
     ],
   });
+}
+
+// ---------------------------------------------------------------------------
+// MiroFish Phase 2 — Theater-Limited Simulation Runner
+// ---------------------------------------------------------------------------
+
+function buildSimulationRound1SystemPrompt(theater, pkg) {
+  const theaterEntities = (pkg.entities || []).filter(
+    (e) => !e.relevanceToTheater || e.relevanceToTheater === theater.theaterId,
+  );
+  const entityList = theaterEntities.slice(0, 10).map(
+    (e) => `- ${sanitizeForPrompt(e.entityId)} | ${sanitizeForPrompt(e.name)} | class=${sanitizeForPrompt(e.class)} | stance=${sanitizeForPrompt(e.stance || 'unknown')}`,
+  ).join('\n');
+
+  const theaterSeeds = (pkg.eventSeeds || []).filter((s) => s.theaterId === theater.theaterId);
+  const seedList = theaterSeeds.slice(0, 8).map(
+    (s) => `- ${sanitizeForPrompt(s.seedId)} [${sanitizeForPrompt(s.type)}] ${sanitizeForPrompt(s.summary)} (${sanitizeForPrompt(s.timing)})`,
+  ).join('\n');
+
+  const constraints = (pkg.constraints?.[theater.theaterId] || [])
+    .map((c) => `- [${c.hard ? 'hard' : 'soft'}] ${sanitizeForPrompt(c.class)}: ${sanitizeForPrompt(c.statement)}`).join('\n') || '- No explicit constraints';
+  const theaterEvalTargets = pkg.evaluationTargets?.[theater.theaterId];
+  const evalTargets = (theaterEvalTargets?.requiredPaths || [])
+    .map((p) => `- ${sanitizeForPrompt(p.pathType)}: ${sanitizeForPrompt(p.question)}`).join('\n') || '- General market and security dynamics';
+  const requirement = sanitizeForPrompt(
+    pkg.simulationRequirement?.[theater.theaterId] || theater.theaterLabel || theater.theaterId,
+  );
+
+  return `You are a geopolitical simulation engine. Simulate actor behavior for a theater-level disruption scenario.
+
+SIMULATION CONTEXT:
+${requirement}
+
+THEATER: ${sanitizeForPrompt(theater.theaterLabel || theater.theaterId)} | Region: ${sanitizeForPrompt(theater.theaterRegion || theater.dominantRegion || '')}
+
+ACTORS (use exact entityId when citing actors):
+${entityList || '- (none specified)'}
+
+EVENT SEEDS (cite seedId in reactions where applicable):
+${seedList || '- (none specified)'}
+
+CONSTRAINTS:
+${constraints}
+
+EVALUATION TARGETS:
+${evalTargets}
+
+INSTRUCTIONS:
+Generate EXACTLY 3 divergent paths named "escalation", "containment", and "market_cascade". For each path, model the initial actor reactions in the first 24 hours.
+
+- Actors MUST be from the list above (use their exact entityId)
+- Cite event seeds (seedId) in reactions where applicable
+- Do NOT invent actors, routes, or commodities not present above
+- timing format: "T+0h", "T+6h", "T+12h", "T+24h"
+- Maximum 3 initialReactions per path
+- note: A brief (≤200 char) meta-observation on the divergence logic
+- market_cascade path: model 2nd and 3rd order economic consequences as described in EVALUATION TARGETS above; do not invent commodities, routes, or market instruments not present in the structural context
+
+Return ONLY a JSON object with no markdown fences:
+{
+  "paths": [
+    {
+      "pathId": "escalation",
+      "label": "<short label>",
+      "summary": "<≤200 char summary>",
+      "initialReactions": [
+        { "actorId": "<entityId>", "actorName": "<name>", "action": "<≤120 char>", "timing": "T+0h" }
+      ]
+    },
+    { "pathId": "containment", "label": "...", "summary": "...", "initialReactions": [] },
+    { "pathId": "market_cascade", "label": "...", "summary": "...", "initialReactions": [] }
+  ],
+  "dominantReactions": ["<actor name>: <action summary>"],
+  "note": "<meta-observation>"
+}`;
+}
+
+function buildSimulationRound2SystemPrompt(theater, pkg, round1) {
+  const r1Paths = (round1?.paths || []).slice(0, 3);
+  const pathSummaries = r1Paths.map(
+    (p) => `- ${p.pathId}: ${sanitizeForPrompt(p.summary || '')} — actors: ${(p.initialReactions || []).slice(0, 3).map((r) => sanitizeForPrompt(r.actorId || '')).join(', ')}`,
+  ).join('\n') || '- (no round 1 paths available)';
+
+  const theaterEntities = (pkg.entities || []).filter(
+    (e) => !e.relevanceToTheater || e.relevanceToTheater === theater.theaterId,
+  );
+  const entityIds = theaterEntities.slice(0, 10).map((e) => sanitizeForPrompt(e.entityId || '')).join(', ');
+
+  const r2EvalTargets = pkg.evaluationTargets?.[theater.theaterId];
+  const evalTargets = (r2EvalTargets?.requiredPaths || [])
+    .map((p) => `- ${sanitizeForPrompt(p.pathType)}: ${sanitizeForPrompt(p.question)}`).join('\n') || '- General market and security dynamics';
+
+  return `You are a geopolitical simulation engine. This is ROUND 2 of a 2-round theater simulation.
+
+THEATER: ${sanitizeForPrompt(theater.theaterLabel || theater.theaterId)} | Region: ${sanitizeForPrompt(theater.theaterRegion || theater.dominantRegion || '')}
+
+ROUND 1 PATH SUMMARIES:
+${pathSummaries}
+
+VALID ACTOR IDs: ${entityIds || '(see round 1)'}
+
+EVALUATION TARGETS:
+${evalTargets}
+
+INSTRUCTIONS:
+For each of the 3 paths from Round 1 (escalation, containment, market_cascade), generate the EVOLVED outcome after 72 hours.
+
+- keyActors: 2-4 actor IDs that drive this path
+- roundByRoundEvolution: 2 entries (round 1 summary, round 2 evolution)
+- timingMarkers: 2-4 key events with timing (T+Nh format)
+- stabilizers: 2-4 factors that could prevent the worst outcome
+- invalidators: 2-4 conditions that would invalidate this path
+- confidence: 0.0-1.0 based on evidence strength
+
+Return ONLY a JSON object with no markdown fences:
+{
+  "paths": [
+    {
+      "pathId": "escalation",
+      "label": "<short label>",
+      "summary": "<≤200 char evolved summary>",
+      "keyActors": ["<entityId>"],
+      "roundByRoundEvolution": [
+        { "round": 1, "summary": "<≤160 char>" },
+        { "round": 2, "summary": "<≤160 char>" }
+      ],
+      "confidence": 0.35,
+      "timingMarkers": [{ "event": "<≤80 char>", "timing": "T+Nh" }]
+    },
+    { "pathId": "containment", "label": "...", "summary": "...", "keyActors": [], "roundByRoundEvolution": [], "confidence": 0.50, "timingMarkers": [] },
+    { "pathId": "market_cascade", "label": "...", "summary": "...", "keyActors": [], "roundByRoundEvolution": [], "confidence": 0.15, "timingMarkers": [] }
+  ],
+  "stabilizers": ["<≤100 char>"],
+  "invalidators": ["<≤100 char>"],
+  "globalObservations": "<≤300 char>",
+  "confidenceNotes": "<≤200 char>"
+}`;
+}
+
+function tryParseSimulationRoundPayload(text, round) {
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed?.paths)) return { paths: null };
+    const expectedIds = new Set(['escalation', 'containment', 'market_cascade']);
+    const paths = parsed.paths.filter((p) => p && expectedIds.has(p.pathId));
+    if (paths.length === 0) return { paths: null };
+    if (round === 2) {
+      return {
+        paths,
+        stabilizers: Array.isArray(parsed.stabilizers) ? parsed.stabilizers.map(String).slice(0, 6) : [],
+        invalidators: Array.isArray(parsed.invalidators) ? parsed.invalidators.map(String).slice(0, 6) : [],
+        globalObservations: String(parsed.globalObservations || '').slice(0, 300),
+        confidenceNotes: String(parsed.confidenceNotes || '').slice(0, 200),
+      };
+    }
+    return {
+      paths,
+      dominantReactions: Array.isArray(parsed.dominantReactions) ? parsed.dominantReactions.map(String).slice(0, 6) : [],
+      note: String(parsed.note || '').slice(0, 200),
+    };
+  } catch {
+    return { paths: null };
+  }
+}
+
+function extractSimulationRoundPayload(text, round) {
+  const cleaned = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\|thinking\|>[\s\S]*?<\|\/thinking\|>/gi, '')
+    .replace(/```json\s*/gi, '```')
+    .trim();
+  const candidates = [];
+  const fencedBlocks = [...cleaned.matchAll(/```([\s\S]*?)```/g)].map((m) => m[1].trim());
+  candidates.push(...fencedBlocks);
+  candidates.push(cleaned);
+
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    const direct = tryParseSimulationRoundPayload(trimmed, round);
+    if (direct.paths) return { ...direct, diagnostics: { stage: 'direct', preview: sanitizeForPrompt(trimmed).slice(0, 160) } };
+    const firstObject = extractFirstJsonObject(trimmed);
+    if (firstObject) {
+      const parsed = tryParseSimulationRoundPayload(firstObject, round);
+      if (parsed.paths) return { ...parsed, diagnostics: { stage: 'extracted', preview: sanitizeForPrompt(firstObject).slice(0, 160) } };
+    }
+  }
+  return { paths: null, diagnostics: { stage: 'no_json', preview: sanitizeForPrompt(cleaned).slice(0, 160) } };
+}
+
+async function runTheaterSimulation(theater, pkg) {
+  const theaterLabel = sanitizeForPrompt(theater.theaterLabel || theater.theaterId);
+  const userPrompt1 = `Theater: ${theaterLabel}\nRun ID: ${pkg.runId}\nGenerate Round 1 actor reactions for the 3 divergent paths.`;
+
+  const r1Raw = await callForecastLLM(
+    buildSimulationRound1SystemPrompt(theater, pkg),
+    userPrompt1,
+    { ...getForecastLlmCallOptions('simulation_round_1'), stage: 'simulation_round_1', maxTokens: SIMULATION_ROUND1_MAX_TOKENS, temperature: 0 },
+  );
+  if (!r1Raw) return { failed: true, reason: 'round1_llm_failed' };
+  const r1 = extractSimulationRoundPayload(r1Raw.text, 1);
+  if (!r1.paths) return { failed: true, reason: 'round1_parse_failed', diagnostics: r1.diagnostics };
+
+  const userPrompt2 = `Theater: ${theaterLabel}\nRun ID: ${pkg.runId}\nGenerate Round 2 path evolution (72h) based on the Round 1 paths.`;
+  const r2Raw = await callForecastLLM(
+    buildSimulationRound2SystemPrompt(theater, pkg, r1),
+    userPrompt2,
+    { ...getForecastLlmCallOptions('simulation_round_2'), stage: 'simulation_round_2', maxTokens: SIMULATION_ROUND2_MAX_TOKENS, temperature: 0 },
+  );
+  if (!r2Raw) return { round1: r1, round2: null, failed: false };
+  const r2 = extractSimulationRoundPayload(r2Raw.text, 2);
+  return { round1: r1, round2: r2.paths ? r2 : null, failed: false };
+}
+
+function buildSimulationOutcomeKey(runId, generatedAt) {
+  const prefix = buildTraceRunPrefix(runId, generatedAt, FORECAST_DEEP_RUN_PREFIX);
+  return `${prefix}/simulation-outcome.json`;
+}
+
+async function fetchSimulationOutcomeForMerge(storageConfig, currentRunId) {
+  if (!storageConfig) return null;
+  try {
+    const { url, token } = getRedisCredentials();
+    const pointer = await redisGet(url, token, SIMULATION_OUTCOME_LATEST_KEY).catch(() => null);
+    if (!pointer?.outcomeKey) return null;
+    const MAX_STALE_MS = 6 * 60 * 60 * 1000;
+    const isCurrentRun = pointer.runId === currentRunId;
+    const isFresh = (Date.now() - (pointer.generatedAt || 0)) < MAX_STALE_MS;
+    if (!isCurrentRun && !isFresh) return null;
+    const outcome = await getR2JsonObject(storageConfig, pointer.outcomeKey).catch(() => null);
+    if (!outcome?.theaterResults?.length) return null;
+    return { ...outcome, isCurrentRun };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write per-forecast simulation decorations to Redis after a simulation rescore.
+ *
+ * Maps each candidateStateId in simulationEvidence.adjustments → stateUnit.forecastIds (via
+ * snapshot.fullRunStateUnits), picks the strongest-signal adjustment per candidate, and writes
+ * forecast:sim-decorations:v1 as a flat { byForecastId: { [id]: decoration } } map.
+ *
+ * These decorations are consumed by applySimulationDecorationsToForecasts() in the NEXT fast-path
+ * seed run, so the ForecastPanel sub-bar reflects simulation evidence from the most recent run.
+ *
+ * @param {object} mergeResult — result of applySimulationMerge (has simulationEvidence.adjustments)
+ * @param {object} snapshot — deep forecast snapshot (has fullRunStateUnits with forecastIds)
+ */
+async function writeSimulationDecorations(mergeResult, snapshot) {
+  // Guard: skip only on genuinely bogus/absent simulationEvidence — NOT on empty adjustments.
+  // An empty adjustments array is a valid result (simulation ran but nothing crossed thresholds).
+  // We MUST write in that case to overwrite any stale decorations from prior runs.
+  if (!mergeResult?.simulationEvidence) return;
+  const adjustments = mergeResult.simulationEvidence.adjustments;
+  if (!Array.isArray(adjustments)) return;
+
+  const stateUnits = Array.isArray(snapshot?.fullRunStateUnits) ? snapshot.fullRunStateUnits : [];
+  // Build candidateStateId → forecastIds lookup
+  const candidateToForecastIds = new Map();
+  for (const unit of stateUnits) {
+    if (unit?.id && Array.isArray(unit.forecastIds) && unit.forecastIds.length > 0) {
+      candidateToForecastIds.set(unit.id, unit.forecastIds);
+    }
+  }
+
+  // Group adjustments by candidateStateId
+  /** @type {Map<string, Array<{simulationAdjustment: number, simPathConfidence: number, demotedBySimulation: boolean}>>} */
+  const byCandidateId = new Map();
+  for (const adj of adjustments) {
+    const { candidateStateId, simulationAdjustment, details, wasAccepted, nowAccepted } = adj;
+    if (!candidateStateId) continue;
+    if (!byCandidateId.has(candidateStateId)) byCandidateId.set(candidateStateId, []);
+    byCandidateId.get(candidateStateId).push({
+      simulationAdjustment: Number(simulationAdjustment || 0),
+      simPathConfidence: Number(details?.simPathConfidence ?? 1.0),
+      demotedBySimulation: !!(wasAccepted && !nowAccepted),
+    });
+  }
+
+  // For each candidate, pick the adjustment with the highest absolute value (strongest signal).
+  // When multiple candidates map to the same forecast ID, keep the highest absolute value.
+  /** @type {Record<string, {simulationAdjustment: number, simPathConfidence: number, demotedBySimulation: boolean}>} */
+  const byForecastId = {};
+  for (const [candidateStateId, adjs] of byCandidateId) {
+    const best = adjs.reduce((prev, curr) =>
+      Math.abs(curr.simulationAdjustment) > Math.abs(prev.simulationAdjustment) ? curr : prev
+    );
+    const forecastIds = candidateToForecastIds.get(candidateStateId) || [];
+    for (const fid of forecastIds) {
+      const existing = byForecastId[fid];
+      if (!existing || Math.abs(best.simulationAdjustment) > Math.abs(existing.simulationAdjustment)) {
+        byForecastId[fid] = { ...best };
+      }
+    }
+  }
+
+  // Always write — even when byForecastId is empty — so later runs clear stale decorations
+  // from prior runs. Without this, old simulation flags persist for the full 3-day TTL.
+  // Run-order guard: if a newer run has already written, skip to avoid poisoning the side key
+  // with stale data that would be applied by the next fast-path seed.
+  const decorationCount = Object.keys(byForecastId).length;
+  // Store the originating run's generatedAt (not Date.now()) so the age check in
+  // applySimulationDecorationsToForecasts measures run age, not write timestamp.
+  const runGeneratedAt = snapshot?.generatedAt || Date.now();
+  try {
+    const { url, token } = getRedisCredentials();
+    const sideKeyStatus = await redisAtomicWriteSimDecorations(url, token, SIMULATION_DECORATIONS_KEY, {
+      runId: snapshot?.runId || '',
+      generatedAt: runGeneratedAt,
+      byForecastId,
+    }, SIMULATION_DECORATIONS_TTL_SECONDS);
+    if (sideKeyStatus.startsWith('SKIPPED:')) {
+      console.log(`  [SimulationDecorations] Skipping side key write — existing is from a newer run (existing=${sideKeyStatus.slice(8)}, this_run=${runGeneratedAt})`);
+      return;
+    }
+    await redisSet(url, token, SIMULATION_DECORATIONS_META_KEY, {
+      fetchedAt: Date.now(),
+      recordCount: decorationCount,
+    }, SIMULATION_DECORATIONS_TTL_SECONDS);
+    console.log(`  [SimulationDecorations] Written ${decorationCount} decorations from ${byCandidateId.size} candidates (runId=${snapshot?.runId || 'unknown'})`);
+    // Immediately patch forecast:predictions:v2 so the panel sees this run's simulation data
+    // without waiting for the next fast-path seed. Pass runGeneratedAt so the patch can reject
+    // a newer run's payload (prevents cross-run stamping when workers finish out of order).
+    await patchPublishedForecastsWithSimDecorations(byForecastId, runGeneratedAt);
+  } catch (err) {
+    console.warn(`  [SimulationDecorations] Write failed: ${err.message}`);
+  }
+}
+
+// Lua script for atomic write-if-newer of the simulation decoration side key.
+// Prevents a late older worker from overwriting a newer run's decorations.
+//
+// KEYS[1]  = SIMULATION_DECORATIONS_KEY (forecast:sim-decorations:v1)
+// ARGV[1]  = runGeneratedAt of this run (decimal string; '0' = unconditional write)
+// ARGV[2]  = new payload JSON string
+// ARGV[3]  = TTL in seconds
+//
+// Returns: 'WRITTEN' | 'SKIPPED:<existingGeneratedAt>'
+const _SIM_SIDE_WRITE_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if raw then
+  local ok, existing = pcall(cjson.decode, raw)
+  local existingTs = ok and tonumber(existing.generatedAt) or 0
+  local runTs = tonumber(ARGV[1]) or 0
+  if runTs > 0 and existingTs > runTs then
+    return 'SKIPPED:' .. tostring(existingTs)
+  end
+end
+redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
+return 'WRITTEN'
+`.trim();
+
+/**
+ * Atomically write the simulation decoration side key only if this run is newer
+ * than any existing value. Prevents a late older worker from poisoning the side key
+ * with stale byForecastId data.
+ *
+ * Production path: single Redis EVAL (atomic read-compare-write).
+ * Test path (_testRedisStore set): equivalent JavaScript logic.
+ *
+ * Returns: 'WRITTEN' | 'SKIPPED:<existingGeneratedAt>'
+ *
+ * @param {string} url
+ * @param {string} token
+ * @param {string} key  SIMULATION_DECORATIONS_KEY
+ * @param {{ runId: string, generatedAt: number, byForecastId: object }} payload
+ * @param {number} ttlSeconds
+ * @returns {Promise<string>}
+ */
+async function redisAtomicWriteSimDecorations(url, token, key, payload, ttlSeconds) {
+  // ── Test path ────────────────────────────────────────────────────────────────
+  if (_testRedisStore) {
+    const existing = _testRedisStore[key] ?? null;
+    const existingTs = typeof existing?.generatedAt === 'number' ? existing.generatedAt : 0;
+    const runTs = typeof payload.generatedAt === 'number' ? payload.generatedAt : 0;
+    if (runTs > 0 && existingTs > runTs) return `SKIPPED:${existingTs}`;
+    _testRedisStore[key] = JSON.parse(JSON.stringify(payload));
+    return 'WRITTEN';
+  }
+  // ── Production path: Lua EVAL ────────────────────────────────────────────────
+  const result = await redisCommand(url, token, [
+    'EVAL', _SIM_SIDE_WRITE_LUA, '1',
+    key,
+    String(typeof payload.generatedAt === 'number' ? payload.generatedAt : 0),
+    JSON.stringify(payload),
+    String(ttlSeconds),
+  ]);
+  return result?.result ?? 'WRITTEN';
+}
+
+// Lua script for atomic compare-and-swap patch of the canonical forecast key.
+// Executed via EVAL so the read-guard-modify-write is a single Redis operation with no TOCTOU gap.
+//
+// KEYS[1]  = canonical key (forecast:predictions:v2)
+// ARGV[1]  = runGeneratedAt as a decimal string ('0' means no guard)
+// ARGV[2]  = byForecastId JSON string
+// ARGV[3]  = TTL in seconds
+//
+// Returns: 'MISSING' | 'SKIPPED:<publishedAt>' | 'UNCHANGED' | 'PATCHED:<count>'
+const _SIM_PATCH_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 'MISSING' end
+local ok, payload = pcall(cjson.decode, raw)
+if not ok then return 'MISSING' end
+if type(payload.predictions) ~= 'table' then return 'MISSING' end
+local runTs = tonumber(ARGV[1]) or 0
+local pubTs = tonumber(payload.generatedAt) or 0
+if runTs > 0 and pubTs > runTs then
+  return 'SKIPPED:' .. tostring(pubTs)
+end
+local ok2, decs = pcall(cjson.decode, ARGV[2])
+if not ok2 then return 'MISSING' end
+local patched = 0
+for _, pred in ipairs(payload.predictions) do
+  local id = pred.id
+  local dec = decs[id]
+  local newAdj  = dec and tonumber(dec.simulationAdjustment) or 0
+  local newConf = dec and tonumber(dec.simPathConfidence)    or 0
+  local newDem  = dec and dec.demotedBySimulation            or false
+  if pred.simulationAdjustment ~= newAdj or pred.simPathConfidence ~= newConf or pred.demotedBySimulation ~= newDem then
+    pred.simulationAdjustment  = newAdj
+    pred.simPathConfidence     = newConf
+    pred.demotedBySimulation   = newDem
+    patched = patched + 1
+  end
+end
+if patched == 0 then return 'UNCHANGED' end
+local ttl = tonumber(ARGV[3]) or 21600
+redis.call('SET', KEYS[1], cjson.encode(payload), 'EX', ttl)
+return 'PATCHED:' .. tostring(patched)
+`.trim();
+
+/**
+ * Atomically patch forecast:predictions:v2 with simulation decoration fields.
+ *
+ * Production path: single Redis EVAL (Lua) — the read, generatedAt guard, field mutations,
+ * and write happen in one atomic operation with no TOCTOU gap. A newer fast-path seed that
+ * publishes between GET and SET in a plain read-modify-write would be silently overwritten;
+ * this Lua script prevents that.
+ *
+ * Test path (_testRedisStore set): equivalent JavaScript logic — safe because the test store
+ * is single-threaded and there is no real concurrent writer.
+ *
+ * Returns a status string: 'MISSING' | 'SKIPPED:<publishedAt>' | 'UNCHANGED' | 'PATCHED:<count>'
+ *
+ * @param {string} url
+ * @param {string} token
+ * @param {string} canonicalKey
+ * @param {Record<string, {simulationAdjustment: number, simPathConfidence: number, demotedBySimulation: boolean}>} byForecastId
+ * @param {number} [runGeneratedAt]
+ * @param {number} ttlSeconds
+ * @returns {Promise<string>}
+ */
+async function redisAtomicPatchSimDecorations(url, token, canonicalKey, byForecastId, runGeneratedAt, ttlSeconds) {
+  // ── Test path: JavaScript equivalent (no real concurrency in tests) ──────────
+  if (_testRedisStore) {
+    const published = _testRedisStore[canonicalKey] ?? null;
+    if (!Array.isArray(published?.predictions)) return 'MISSING';
+    const runTs = typeof runGeneratedAt === 'number' ? runGeneratedAt : 0;
+    const pubTs = typeof published.generatedAt === 'number' ? published.generatedAt : 0;
+    if (runTs > 0 && pubTs > runTs) return `SKIPPED:${pubTs}`;
+    let patched = 0;
+    for (const pred of published.predictions) {
+      const dec = byForecastId[pred.id];
+      const newAdj  = dec ? Number(dec.simulationAdjustment || 0) : 0;
+      const newConf = dec ? Number(dec.simPathConfidence ?? 0) : 0;
+      const newDem  = dec ? !!dec.demotedBySimulation : false;
+      if (pred.simulationAdjustment !== newAdj || pred.simPathConfidence !== newConf || pred.demotedBySimulation !== newDem) {
+        pred.simulationAdjustment  = newAdj;
+        pred.simPathConfidence     = newConf;
+        pred.demotedBySimulation   = newDem;
+        patched++;
+      }
+    }
+    if (patched === 0) return 'UNCHANGED';
+    _testRedisStore[canonicalKey] = JSON.parse(JSON.stringify(published));
+    return `PATCHED:${patched}`;
+  }
+  // ── Production path: Lua EVAL (atomic) ───────────────────────────────────────
+  const result = await redisCommand(url, token, [
+    'EVAL', _SIM_PATCH_LUA, '1',
+    canonicalKey,
+    String(typeof runGeneratedAt === 'number' ? runGeneratedAt : 0),
+    JSON.stringify(byForecastId),
+    String(ttlSeconds),
+  ]);
+  return result?.result ?? 'MISSING';
+}
+
+/**
+ * Patch forecast:predictions:v2 in-place with simulation decoration fields.
+ * Called immediately after writeSimulationDecorations to update the canonical key
+ * for same-run consumers — without this, ForecastPanel only sees the prior run's
+ * simulation data until the next fast-path seed re-applies decorations.
+ *
+ * Forecasts present in byForecastId get updated sim fields.
+ * Forecasts NOT in byForecastId have their sim fields reset to 0 / false, so that
+ * any stale values from a prior run are cleared at the same time.
+ *
+ * The patch is atomic via Lua EVAL: the read, generatedAt guard, mutations, and write
+ * happen in a single Redis operation so a concurrent fast-path seed cannot be overwritten.
+ *
+ * Non-fatal: any failure is logged as a warning and the function returns.
+ *
+ * @param {Record<string, {simulationAdjustment: number, simPathConfidence: number, demotedBySimulation: boolean}>} byForecastId
+ * @param {number} [runGeneratedAt] — generatedAt from the snapshot that produced byForecastId
+ */
+async function patchPublishedForecastsWithSimDecorations(byForecastId, runGeneratedAt) {
+  try {
+    const { url, token } = getRedisCredentials();
+    const status = await redisAtomicPatchSimDecorations(url, token, CANONICAL_KEY, byForecastId, runGeneratedAt, TTL_SECONDS);
+    if (status.startsWith('PATCHED:')) {
+      console.log(`  [SimulationDecorations] Patched ${status.slice(8)} forecasts in ${CANONICAL_KEY} (atomic)`);
+    } else if (status.startsWith('SKIPPED:')) {
+      console.log(`  [SimulationDecorations] Skipping patch — canonical key is from a newer run (published=${status.slice(8)}, sim_run=${runGeneratedAt})`);
+    } else if (status === 'MISSING') {
+      console.warn('  [SimulationDecorations] Cannot patch canonical key — predictions missing or not an array');
+    }
+    // UNCHANGED: no-op, no log needed
+  } catch (err) {
+    console.warn(`  [SimulationDecorations] Canonical key patch failed (non-fatal): ${err.message}`);
+  }
+}
+
+/**
+ * Apply simulation decorations from forecast:sim-decorations:v1 to the given predictions array.
+ * Mutates pred.simulationAdjustment, pred.simPathConfidence, pred.demotedBySimulation in-place.
+ * Decorations come from the prior simulation run — stale by at most one fast-path seed cycle.
+ * Failures are non-fatal: the pipeline continues without decorations.
+ *
+ * @param {object[]} predictions
+ */
+async function applySimulationDecorationsToForecasts(predictions) {
+  try {
+    const { url, token } = getRedisCredentials();
+    const decorations = await redisGet(url, token, SIMULATION_DECORATIONS_KEY);
+    if (!decorations?.byForecastId || typeof decorations.byForecastId !== 'object') return;
+
+    // Defense-in-depth: skip decorations that are too old. writeSimulationDecorations overwrites
+    // on every simulation run (including empty results), so this guard only fires when no
+    // simulation has run for SIMULATION_DECORATIONS_MAX_AGE_MS (e.g., 48h) — e.g., during outage.
+    const ageMs = typeof decorations.generatedAt === 'number' ? Date.now() - decorations.generatedAt : Infinity;
+    if (ageMs > SIMULATION_DECORATIONS_MAX_AGE_MS) {
+      console.warn(`  [SimulationDecorations] Skipping stale decorations (age=${Math.round(ageMs / 3600000)}h, run=${decorations.runId || 'unknown'})`);
+      return;
+    }
+
+    let applied = 0;
+    for (const pred of predictions) {
+      const dec = decorations.byForecastId[pred.id];
+      if (!dec) continue;
+      pred.simulationAdjustment = Number(dec.simulationAdjustment || 0);
+      pred.simPathConfidence = Number(dec.simPathConfidence ?? 1.0);
+      pred.demotedBySimulation = !!dec.demotedBySimulation;
+      applied++;
+    }
+    if (applied > 0) {
+      console.log(`  [SimulationDecorations] Applied to ${applied}/${predictions.length} forecasts (run ${decorations.runId || 'unknown'})`);
+    }
+  } catch (err) {
+    console.warn(`  [SimulationDecorations] Apply failed (non-fatal): ${err.message}`);
+  }
+}
+
+/**
+ * Re-apply simulation merge against the just-completed simulation for a run whose deep forecast
+ * had already finished with stale (or no) simulation data. Reads forecast-eval.json + snapshot
+ * from R2, re-runs applySimulationMerge with the fresh outcome, and re-writes trace artifacts if
+ * any path was promoted or demoted.
+ *
+ * Called fire-and-forget from processNextSimulationTask after writeSimulationOutcome.
+ *
+ * @param {string} runId
+ * @param {object} freshOutcome — the simulation outcome just written (theaterResults array)
+ * @param {object} storageConfig
+ * @returns {Promise<{skipped: boolean, reason?: string, status?: string, pathsPromoted?: number, pathsDemoted?: number}>}
+ */
+async function applyPostSimulationRescore(runId, freshOutcome, storageConfig) {
+  if (!runId || !freshOutcome?.theaterResults?.length || !storageConfig) {
+    return { skipped: true, reason: 'missing_params' };
+  }
+  try {
+    const generatedAt = freshOutcome.generatedAt || parseForecastRunGeneratedAt(runId);
+    const artifactKeys = buildForecastTraceArtifactKeys(runId, generatedAt, storageConfig.basePrefix || FORECAST_DEEP_RUN_PREFIX);
+    const snapshotKey = buildDeepForecastSnapshotKey(runId, generatedAt, storageConfig.basePrefix || FORECAST_DEEP_RUN_PREFIX);
+
+    const [evalData, snapshot] = await Promise.all([
+      getR2JsonObject(storageConfig, artifactKeys.forecastEvalKey).catch(() => null),
+      getR2JsonObject(storageConfig, snapshotKey).catch(() => null),
+    ]);
+
+    if (!evalData?.status || (!evalData.selectedPaths?.length && !evalData.rejectedPaths?.length)) {
+      return { skipped: true, reason: 'no_eval_data' };
+    }
+    if (!snapshot?.impactExpansionCandidates?.length) {
+      return { skipped: true, reason: 'no_candidates' };
+    }
+
+    // Only re-score if there is actionable opportunity:
+    // - 'completed_no_material_change': always proceed — any simulation evidence could promote a rejected path
+    // - 'completed': proceed if (a) a selected expanded path risks demotion, or (b) a rejected expanded
+    //   path could be promoted. Thresholds are derived from the max adjustments in computeSimulationAdjustment:
+    //     max positive: +0.08 (bucketChannelMatch) + 0.04 (actor overlap >= 2) = +0.12
+    //     max negative: -0.15 (stabilizer) — larger than invalidator -0.12
+    //   Demotion risk threshold: 0.50 + 0.15 = 0.65. Promotion window: [0.50 - 0.12, 0.50) = [0.38, 0.50).
+    const hasDemotionRisk = (evalData.selectedPaths || []).some(
+      (p) => p.type === 'expanded' && p.acceptanceScore < 0.65,
+    );
+    const hasPromotionOpportunity = (evalData.rejectedPaths || []).some(
+      (p) => p.type === 'expanded' && p.acceptanceScore >= 0.38 && p.acceptanceScore < SIMULATION_MERGE_ACCEPT_THRESHOLD,
+    );
+    if (evalData.status !== 'completed_no_material_change' && !hasDemotionRisk && !hasPromotionOpportunity) {
+      return { skipped: true, reason: 'no_actionable_paths' };
+    }
+
+    const priorWorldState = snapshot.priorWorldStateKey
+      ? await getR2JsonObject(storageConfig, snapshot.priorWorldStateKey).catch(() => null)
+      : null;
+
+    // Reconstruct evaluation from stored paths (full path objects including direct/second/third)
+    const evaluation = {
+      status: evalData.status,
+      selectedPaths: [...(evalData.selectedPaths || [])],
+      rejectedPaths: [...(evalData.rejectedPaths || [])],
+      impactExpansionBundle: null,
+      deepWorldState: null,
+    };
+
+    // Tag the outcome as current-run since we just wrote it for this runId
+    const simulationOutcome = { ...freshOutcome, isCurrentRun: true };
+    const mergeResult = applySimulationMerge(
+      evaluation,
+      simulationOutcome,
+      snapshot.impactExpansionCandidates,
+      snapshot,
+      priorWorldState,
+    );
+
+    const ev = mergeResult.simulationEvidence;
+
+    // Always write decorations when adjustments exist — even if no path crossed the
+    // promotion/demotion threshold, any non-zero adjustment is worth showing in ForecastPanel.
+    // Awaited (not fire-and-forget) because applyPostSimulationRescore may return immediately
+    // on the no_path_changes branch before the process exits, abandoning a fire-and-forget promise.
+    await writeSimulationDecorations(mergeResult, snapshot).catch((err) =>
+      console.warn(`  [SimulationDecorations] write failed: ${err.message}`)
+    );
+
+    if (!ev?.pathsPromoted && !ev?.pathsDemoted) {
+      return { skipped: false, reason: 'no_path_changes', adjustmentsApplied: ev?.adjustments?.length || 0 };
+    }
+
+    // Paths changed — re-write the trace artifacts with updated evaluation + simulation evidence.
+    const deepForecast = {
+      completedAt: new Date().toISOString(),
+      failureReason: '',
+      rejectedPathsPreview: buildDeepForecastRejectedPreview(evaluation.rejectedPaths || []),
+      selectedPathCount: (evaluation.selectedPaths || []).filter((p) => p.type === 'expanded').length,
+      replacedFastRun: evaluation.status === 'completed',
+      status: evaluation.status || 'completed_no_material_change',
+      selectedStateIds: (evaluation.selectedPaths || []).filter((p) => p.type === 'expanded').map((p) => p.candidateStateId),
+      simulationRescored: true,
+    };
+
+    await writeForecastTraceArtifacts({
+      ...snapshot,
+      priorWorldState,
+      priorWorldStates: priorWorldState ? [priorWorldState] : [],
+      impactExpansionBundle: evaluation.impactExpansionBundle || null,
+      deepPathEvaluation: evaluation,
+      simulationEvidence: ev,
+      forecastDepth: 'deep',
+      deepForecast,
+      worldStateOverride: evaluation.deepWorldState,
+      candidateWorldStateOverride: evaluation.deepWorldState,
+      runStatusContext: {
+        status: deepForecast.status,
+        stage: 'deep_rescored',
+        progressPercent: 100,
+        processedCandidateCount: (snapshot.impactExpansionCandidates || []).length,
+        acceptedPathCount: deepForecast.selectedPathCount,
+        completedAt: deepForecast.completedAt,
+      },
+    }, { runId, skipPointer: true });
+
+    return {
+      status: 'rescored',
+      runId,
+      pathsPromoted: ev.pathsPromoted,
+      pathsDemoted: ev.pathsDemoted,
+      adjustmentsApplied: ev.adjustments?.length || 0,
+    };
+  } catch (err) {
+    console.warn(`[SimulationRescore] Error for ${runId}: ${err.message}`);
+    return { skipped: true, reason: `error: ${err.message}` };
+  }
+}
+
+
+async function writeSimulationOutcome(pkg, outcome, { storageConfig } = {}) {
+  const config = storageConfig ?? resolveR2StorageConfig();
+  if (!config || !pkg?.runId) return null;
+  const { runId, generatedAt } = pkg;
+  const outcomeKey = buildSimulationOutcomeKey(runId, generatedAt || Date.now());
+  await putR2JsonObject(config, outcomeKey, outcome, {
+    runid: String(runId),
+    kind: 'simulation_outcome',
+    schema_version: SIMULATION_OUTCOME_SCHEMA_VERSION,
+  });
+  const { url, token } = getRedisCredentials();
+  const uiTheaters = (outcome.theaterResults || []).map((tr) => ({
+    theaterId: tr.theaterId,
+    theaterLabel: tr.theaterLabel || tr.theaterId,
+    stateKind: tr.stateKind || '',
+    topPaths: (tr.topPaths || [])
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+      .slice(0, 3)
+      .map((p) => ({
+        pathId: p.pathId || '',
+        label: p.label,
+        summary: p.summary,
+        confidence: p.confidence,
+        keyActors: (p.keyActors || []).slice(0, 4),
+      })),
+    dominantReactions: (tr.dominantReactions || []).slice(0, 3),
+    stabilizers: (tr.stabilizers || []).slice(0, 3),
+    invalidators: (tr.invalidators || []).slice(0, 2),
+  }));
+  await redisCommand(url, token, [
+    'SET',
+    SIMULATION_OUTCOME_LATEST_KEY,
+    JSON.stringify({
+      runId,
+      outcomeKey,
+      schemaVersion: SIMULATION_OUTCOME_SCHEMA_VERSION,
+      theaterCount: (outcome.theaterResults || []).length,
+      generatedAt: generatedAt || Date.now(),
+      uiTheaters,
+    }),
+    'EX',
+    String(TRACE_REDIS_TTL_SECONDS),
+  ]);
+  return { outcomeKey };
+}
+
+function validateRunId(runId) { return typeof runId === 'string' && VALID_RUN_ID_RE.test(runId); }
+
+function buildSimulationTaskKey(runId) { return `${SIMULATION_TASK_KEY_PREFIX}:${runId}`; }
+function buildSimulationLockKey(runId) { return `${SIMULATION_LOCK_KEY_PREFIX}:${runId}`; }
+
+async function enqueueSimulationTask(runId) {
+  if (!runId) return { queued: false, reason: 'missing_run_id' };
+  if (!validateRunId(runId)) return { queued: false, reason: 'invalid_run_id_format' };
+  const { url, token } = getRedisCredentials();
+  const queued = await redisCommand(url, token, [
+    'SET', buildSimulationTaskKey(runId),
+    JSON.stringify({ runId, createdAt: Date.now() }),
+    'EX', String(SIMULATION_TASK_TTL_SECONDS), 'NX',
+  ]);
+  if (queued?.result !== 'OK') return { queued: false, reason: 'duplicate' };
+  await redisCommand(url, token, ['ZADD', SIMULATION_TASK_QUEUE_KEY, String(Date.now()), runId]);
+  await redisCommand(url, token, ['EXPIRE', SIMULATION_TASK_QUEUE_KEY, String(TRACE_REDIS_TTL_SECONDS)]);
+  return { queued: true, reason: '' };
+}
+
+async function claimSimulationTask(runId, workerId) {
+  if (!runId) return null;
+  const { url, token } = getRedisCredentials();
+  const lockKey = buildSimulationLockKey(runId);
+  const claim = await redisCommand(url, token, [
+    'SET', lockKey, workerId, 'EX', String(SIMULATION_LOCK_TTL_SECONDS), 'NX',
+  ]);
+  if (claim?.result !== 'OK') return null;
+  const taskRaw = await redisGet(url, token, buildSimulationTaskKey(runId));
+  if (!taskRaw?.runId) {
+    await redisDel(url, token, lockKey);
+    return null;
+  }
+  return taskRaw;
+}
+
+async function completeSimulationTask(runId) {
+  if (!runId) return;
+  const { url, token } = getRedisCredentials();
+  await redisCommand(url, token, ['ZREM', SIMULATION_TASK_QUEUE_KEY, runId]);
+  await redisDel(url, token, buildSimulationTaskKey(runId));
+  await redisDel(url, token, buildSimulationLockKey(runId));
+}
+
+async function listQueuedSimulationTasks(limit = 10) {
+  const { url, token } = getRedisCredentials();
+  const response = await redisCommand(url, token, [
+    'ZRANGE', SIMULATION_TASK_QUEUE_KEY, '0', String(Math.max(0, limit - 1)),
+  ]);
+  return Array.isArray(response?.result) ? response.result : [];
+}
+
+async function processNextSimulationTask(options = {}) {
+  const workerId = options.workerId || `sim-worker-${process.pid}-${Date.now()}`;
+  const queuedRunIds = options.runId ? [options.runId] : await listQueuedSimulationTasks(10);
+
+  for (const runId of queuedRunIds) {
+    if (!validateRunId(runId)) {
+      console.warn(`  [Simulation] Skipping invalid runId format: ${String(runId).slice(0, 80)}`);
+      continue;
+    }
+    const task = await claimSimulationTask(runId, workerId);
+    if (!task) continue;
+
+    try {
+      const { url, token } = getRedisCredentials();
+
+      // Idempotency: skip if already processed for this runId
+      const existing = await redisGet(url, token, SIMULATION_OUTCOME_LATEST_KEY);
+      if (existing?.runId === runId) {
+        console.log(`  [Simulation] Skipping ${runId} — outcome already written`);
+        await completeSimulationTask(runId);
+        return { status: 'skipped', reason: 'already_processed', runId };
+      }
+
+      // Read package pointer from Redis
+      const pkgPointer = await redisGet(url, token, SIMULATION_PACKAGE_LATEST_KEY);
+      if (!pkgPointer?.pkgKey) {
+        console.warn(`  [Simulation] No package pointer for ${runId}`);
+        await completeSimulationTask(runId);
+        return { status: 'failed', reason: 'no_package_pointer', runId };
+      }
+      if (pkgPointer.runId && pkgPointer.runId !== runId) {
+        console.warn(`  [Simulation] Package runId mismatch: task=${runId} pkg=${pkgPointer.runId} — using latest package (Phase 2 behaviour)`);
+      }
+
+      const storageConfig = resolveR2StorageConfig();
+      if (!storageConfig) {
+        await completeSimulationTask(runId);
+        return { status: 'failed', reason: 'no_storage_config', runId };
+      }
+
+      const pkgData = await getR2JsonObject(storageConfig, pkgPointer.pkgKey);
+      if (!pkgData?.selectedTheaters) {
+        await completeSimulationTask(runId);
+        return { status: 'failed', reason: 'package_read_failed', runId };
+      }
+
+      const eligibleTheaters = (pkgData.selectedTheaters || []).filter(isSimulationEligible);
+      console.log(`  [Simulation] ${runId}: ${eligibleTheaters.length}/${pkgData.selectedTheaters.length} theaters eligible`);
+
+      const theaterResults = [];
+      const failedTheaters = [];
+
+      for (const theater of eligibleTheaters) {
+        console.log(`  [Simulation] Running theater: ${theater.theaterId}`);
+        const result = await runTheaterSimulation(theater, pkgData);
+        if (result.failed) {
+          console.warn(`  [Simulation] Theater ${theater.theaterId} failed: ${result.reason}`);
+          failedTheaters.push({ theaterId: theater.theaterId, reason: result.reason });
+          continue;
+        }
+
+        const r2Paths = result.round2?.paths || [];
+        const r1Paths = result.round1?.paths || [];
+        const mergedPaths = (r2Paths.length ? r2Paths : r1Paths).map((p) => {
+          const r1Path = r1Paths.find((r) => r.pathId === p.pathId);
+          return {
+            pathId: p.pathId,
+            label: sanitizeForPrompt(p.label || p.pathId).slice(0, 80),
+            summary: sanitizeForPrompt(p.summary || '').slice(0, 200),
+            keyActors: Array.isArray(p.keyActors) ? p.keyActors.map((s) => sanitizeForPrompt(String(s)).slice(0, 80)).slice(0, 6) : [],
+            roundByRoundEvolution: Array.isArray(p.roundByRoundEvolution)
+              ? p.roundByRoundEvolution.map((r) => ({ round: r.round, summary: sanitizeForPrompt(r.summary || '').slice(0, 160) }))
+              : [{ round: 1, summary: sanitizeForPrompt((r1Path?.summary || p.summary || '')).slice(0, 160) }],
+            confidence: typeof p.confidence === 'number' ? Math.max(0, Math.min(1, p.confidence)) : 0.5,
+            timingMarkers: Array.isArray(p.timingMarkers)
+              ? p.timingMarkers.slice(0, 6).map((m) => ({ event: sanitizeForPrompt(m.event || '').slice(0, 80), timing: String(m.timing || 'T+0h').slice(0, 10) }))
+              : [],
+          };
+        });
+
+        theaterResults.push({
+          theaterId: theater.theaterId,
+          candidateStateId: theater.candidateStateId || '',
+          theaterLabel: theater.label || theater.dominantRegion || theater.theaterId,
+          stateKind: theater.stateKind || '',
+          topPaths: mergedPaths,
+          dominantReactions: (result.round1?.dominantReactions || []).map((s) => sanitizeForPrompt(String(s)).slice(0, 120)).slice(0, 6),
+          stabilizers: (result.round2?.stabilizers || []).map((s) => sanitizeForPrompt(String(s)).slice(0, 120)).slice(0, 6),
+          invalidators: (result.round2?.invalidators || []).map((s) => sanitizeForPrompt(String(s)).slice(0, 120)).slice(0, 6),
+          timingMarkers: (result.round2?.paths?.[0]?.timingMarkers || []).slice(0, 4).map((m) => ({ event: sanitizeForPrompt(m.event || '').slice(0, 80), timing: String(m.timing || 'T+0h').slice(0, 10) })),
+        });
+      }
+
+      const outcome = {
+        runId,
+        schemaVersion: SIMULATION_OUTCOME_SCHEMA_VERSION,
+        runnerVersion: SIMULATION_RUNNER_VERSION,
+        sourceSimulationPackageKey: pkgPointer.pkgKey,
+        theaterResults,
+        failedTheaters,
+        globalObservations: eligibleTheaters.length === 0
+          ? 'No maritime chokepoint/energy theaters in package'
+          : theaterResults.length === 0 ? 'All theaters failed simulation' : '',
+        confidenceNotes: `${theaterResults.length}/${eligibleTheaters.length} theaters completed`,
+        generatedAt: pkgData.generatedAt || Date.now(),
+      };
+
+      const writeResult = await writeSimulationOutcome(pkgData, outcome, { storageConfig });
+      await completeSimulationTask(runId);
+      console.log(`  [Simulation] Completed ${runId}: ${theaterResults.length} theaters → ${writeResult?.outcomeKey}`);
+      // Awaited (not fire-and-forget): re-score must complete before process.exit() so that
+      // writeSimulationDecorations + patchPublishedForecastsWithSimDecorations update the
+      // canonical key in the same run. A fire-and-forget here is abandoned when runSimulationWorker
+      // returns and the process exits, leaving forecast:predictions:v2 stale until the next seed.
+      const rescoreResult = await applyPostSimulationRescore(runId, outcome, storageConfig)
+        .catch((err) => { console.warn(`  [SimulationRescore] Error for ${runId}: ${err.message}`); return null; });
+      if (rescoreResult && !rescoreResult.skipped) console.log(`  [SimulationRescore] ${runId}: ${JSON.stringify(rescoreResult)}`);
+      return { status: 'completed', runId, theaterCount: theaterResults.length, outcomeKey: writeResult?.outcomeKey };
+    } catch (err) {
+      console.warn(`  [Simulation] Task failed for ${runId}: ${err.message}`);
+      await completeSimulationTask(runId);
+      return { status: 'failed', reason: err.message, runId };
+    }
+  }
+  return { status: 'idle' };
+}
+
+async function runSimulationWorker({ once = false, runId = '' } = {}) {
+  for (;;) {
+    const result = await processNextSimulationTask({ runId });
+    if (once) return result;
+    if (result?.status === 'idle') await sleep(SIMULATION_POLL_INTERVAL_MS);
+  }
 }
 
 export {
@@ -15525,8 +17147,12 @@ export {
   buildDeepForecastSnapshotKey,
   buildDeepForecastSnapshotPayload,
   writeDeepForecastSnapshot,
-  isMaritimeChokeEnergyCandidate,
+  isSimulationEligible,
+  SIMULATION_ELIGIBILITY_RANK_THRESHOLD,
   inferEntityClassFromName,
+  buildSimulationRequirementText,
+  buildSimulationPackageConstraints,
+  buildSimulationPackageEvaluationTargets,
   buildSimulationPackageFromDeepSnapshot,
   buildSimulationPackageKey,
   writeSimulationPackage,
@@ -15535,6 +17161,35 @@ export {
   enqueueDeepForecastTask,
   processNextDeepForecastTask,
   runDeepForecastWorker,
+  SIMULATION_OUTCOME_LATEST_KEY,
+  SIMULATION_OUTCOME_SCHEMA_VERSION,
+  buildSimulationOutcomeKey,
+  writeSimulationOutcome,
+  buildSimulationRound1SystemPrompt,
+  buildSimulationRound2SystemPrompt,
+  extractSimulationRoundPayload,
+  runTheaterSimulation,
+  enqueueSimulationTask,
+  processNextSimulationTask,
+  runSimulationWorker,
+  fetchSimulationOutcomeForMerge,
+  applyPostSimulationRescore,
+  writeSimulationDecorations,
+  applySimulationDecorationsToForecasts,
+  patchPublishedForecastsWithSimDecorations,
+  redisAtomicPatchSimDecorations,
+  redisAtomicWriteSimDecorations,
+  SIMULATION_DECORATIONS_KEY,
+  SIMULATION_DECORATIONS_MAX_AGE_MS,
+  computeSimulationAdjustment,
+  applySimulationMerge,
+  matchesBucket,
+  matchesChannel,
+  contradictsPremise,
+  negatesDisruption,
+  normalizeActorName,
+  summarizeImpactPathScore,
+  SIMULATION_MERGE_ACCEPT_THRESHOLD,
   scoreImpactExpansionQuality,
   buildImpactExpansionDebugPayload,
   runImpactExpansionPromptRefinement,
@@ -15544,4 +17199,5 @@ export {
   readImpactPromptLearnedSection,
   clearImpactPromptLearnedSection,
   __setForecastLlmCallOverrideForTests,
+  __setRedisStoreForTests,
 };

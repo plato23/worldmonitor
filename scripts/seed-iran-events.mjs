@@ -155,6 +155,9 @@ const LOCATION_COORDS = {
   'al-ahmadi':     { lat: 29.0769, lon: 48.0839 },
   'mina al-ahmadi': { lat: 29.0769, lon: 48.0839 },
   'mina abdullah': { lat: 28.9600, lon: 48.1600 },
+  'kafr qasim':    { lat: 32.1161, lon: 34.9750 },
+  'taybad':        { lat: 35.1884, lon: 60.7814 },
+  'sweihan':       { lat: 24.4041, lon: 55.3325 },
 };
 
 const CATEGORY_MAP = {

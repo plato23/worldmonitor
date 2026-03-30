@@ -165,7 +165,7 @@ async function fetchPbiCharts() {
         const dateStr = `${yr}-${String(mo).padStart(2, '0')}-${String(dy).padStart(2, '0')}`;
         const d = new Date(dateStr);
         if (isNaN(d.getTime()) || d < cutoff) return null;
-        return { date: dateStr, value: val ?? 0 };
+        return { date: dateStr, value: typeof val === 'number' ? val : (Number(val) || 0) };
       })
       .filter(Boolean)
       .sort((a, b) => a.date.localeCompare(b.date));
@@ -296,5 +296,5 @@ async function buildPayload() {
 
 await runSeed('supply_chain', 'hormuz_tracker', CANONICAL_KEY, buildPayload, {
   ttlSeconds: CACHE_TTL,
-  validateFn: (d) => !!(d?.updatedDate || d?.summary || d?.title),
+  validateFn: (d) => !!(d?.updatedDate || d?.summary || d?.title) && d?.charts?.some(c => (c.series?.length ?? 0) > 0),
 });

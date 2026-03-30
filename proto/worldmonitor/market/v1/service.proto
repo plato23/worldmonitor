@@ -20,6 +20,8 @@ import "worldmonitor/market/v1/list_defi_tokens.proto";
 import "worldmonitor/market/v1/list_ai_tokens.proto";
 import "worldmonitor/market/v1/list_other_tokens.proto";
 import "worldmonitor/market/v1/get_fear_greed_index.proto";
+import "worldmonitor/market/v1/list_earnings_calendar.proto";
+import "worldmonitor/market/v1/get_cot_positioning.proto";
 
 // MarketService provides APIs for financial market data from Finnhub, Yahoo Finance, and CoinGecko.
 service MarketService {
@@ -108,5 +110,15 @@ service MarketService {
   // GetFearGreedIndex retrieves the composite Fear & Greed sentiment index.
   rpc GetFearGreedIndex(GetFearGreedIndexRequest) returns (GetFearGreedIndexResponse) {
     option (sebuf.http.config) = {path: "/get-fear-greed-index", method: HTTP_METHOD_GET};
+  }
+
+  // ListEarningsCalendar retrieves upcoming and recent earnings releases.
+  rpc ListEarningsCalendar(ListEarningsCalendarRequest) returns (ListEarningsCalendarResponse) {
+    option (sebuf.http.config) = {path: "/list-earnings-calendar", method: HTTP_METHOD_GET};
+  }
+
+  // GetCotPositioning retrieves CFTC COT institutional positioning data.
+  rpc GetCotPositioning(GetCotPositioningRequest) returns (GetCotPositioningResponse) {
+    option (sebuf.http.config) = {path: "/get-cot-positioning", method: HTTP_METHOD_GET};
   }
 }

@@ -109,7 +109,7 @@ async function fetchOutages() {
       id: `cf-${raw.id}`,
       title: raw.scope ? `${raw.scope} outage in ${countryName}` : `Internet disruption in ${countryName}`,
       link: raw.linkedUrl || 'https://radar.cloudflare.com/outage-center',
-      description: raw.description,
+      description: raw.description ?? '',
       detectedAt: toEpochMs(raw.startDate),
       country: countryName,
       region: '',

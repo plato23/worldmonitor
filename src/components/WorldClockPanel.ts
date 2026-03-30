@@ -217,6 +217,7 @@ export class WorldClockPanel extends Panel {
       const row = handle.closest('.wc-row') as HTMLElement | null;
       if (!row) return;
       e.preventDefault();
+      e.stopPropagation();
       this.dragCityId = row.dataset.cityId ?? null;
       this.dragStartY = e.clientY;
       this.dragging = false;

@@ -357,6 +357,11 @@ export interface GetFearGreedIndexResponse {
   aaiiBear: number;
   fedRate: string;
   unavailable: boolean;
+  fsiValue: number;
+  fsiLabel: string;
+  hygPrice: number;
+  tltPrice: number;
+  sectorPerformance: FearGreedSectorPerformance[];
 }
 
 export interface FearGreedCategory {
@@ -365,6 +370,60 @@ export interface FearGreedCategory {
   contribution: number;
   degraded: boolean;
   inputsJson: string;
+}
+
+export interface FearGreedSectorPerformance {
+  symbol: string;
+  name: string;
+  change1d: number;
+}
+
+export interface ListEarningsCalendarRequest {
+  fromDate: string;
+  toDate: string;
+}
+
+export interface ListEarningsCalendarResponse {
+  earnings: EarningsEntry[];
+  fromDate: string;
+  toDate: string;
+  total: number;
+  unavailable: boolean;
+}
+
+export interface EarningsEntry {
+  symbol: string;
+  company: string;
+  date: string;
+  hour: string;
+  epsEstimate: number;
+  revenueEstimate: number;
+  epsActual: number;
+  revenueActual: number;
+  hasActuals: boolean;
+  surpriseDirection: string;
+}
+
+export interface GetCotPositioningRequest {
+}
+
+export interface GetCotPositioningResponse {
+  instruments: CotInstrument[];
+  reportDate: string;
+  unavailable: boolean;
+}
+
+export interface CotInstrument {
+  name: string;
+  code: string;
+  reportDate: string;
+  assetManagerLong: string;
+  assetManagerShort: string;
+  leveragedFundsLong: string;
+  leveragedFundsShort: string;
+  dealerLong: string;
+  dealerShort: string;
+  netPct: number;
 }
 
 export interface FieldViolation {
@@ -429,6 +488,8 @@ export interface MarketServiceHandler {
   listAiTokens(ctx: ServerContext, req: ListAiTokensRequest): Promise<ListAiTokensResponse>;
   listOtherTokens(ctx: ServerContext, req: ListOtherTokensRequest): Promise<ListOtherTokensResponse>;
   getFearGreedIndex(ctx: ServerContext, req: GetFearGreedIndexRequest): Promise<GetFearGreedIndexResponse>;
+  listEarningsCalendar(ctx: ServerContext, req: ListEarningsCalendarRequest): Promise<ListEarningsCalendarResponse>;
+  getCotPositioning(ctx: ServerContext, req: GetCotPositioningRequest): Promise<GetCotPositioningResponse>;
 }
 
 export function createMarketServiceRoutes(
@@ -1151,6 +1212,91 @@ export function createMarketServiceRoutes(
 
           const result = await handler.getFearGreedIndex(ctx, body);
           return new Response(JSON.stringify(result as GetFearGreedIndexResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/market/v1/list-earnings-calendar",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const url = new URL(req.url, "http://localhost");
+          const params = url.searchParams;
+          const body: ListEarningsCalendarRequest = {
+            fromDate: params.get("fromDate") ?? "",
+            toDate: params.get("toDate") ?? "",
+          };
+          if (options?.validateRequest) {
+            const bodyViolations = options.validateRequest("listEarningsCalendar", body);
+            if (bodyViolations) {
+              throw new ValidationError(bodyViolations);
+            }
+          }
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.listEarningsCalendar(ctx, body);
+          return new Response(JSON.stringify(result as ListEarningsCalendarResponse), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (err: unknown) {
+          if (err instanceof ValidationError) {
+            return new Response(JSON.stringify({ violations: err.violations }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (options?.onError) {
+            return options.onError(err, req);
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          return new Response(JSON.stringify({ message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      },
+    },
+    {
+      method: "GET",
+      path: "/api/market/v1/get-cot-positioning",
+      handler: async (req: Request): Promise<Response> => {
+        try {
+          const pathParams: Record<string, string> = {};
+          const body = {} as GetCotPositioningRequest;
+
+          const ctx: ServerContext = {
+            request: req,
+            pathParams,
+            headers: Object.fromEntries(req.headers.entries()),
+          };
+
+          const result = await handler.getCotPositioning(ctx, body);
+          return new Response(JSON.stringify(result as GetCotPositioningResponse), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });

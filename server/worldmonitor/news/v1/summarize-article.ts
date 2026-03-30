@@ -15,6 +15,8 @@ import {
 import { CHROME_UA } from '../../../_shared/constants';
 import { isProviderAvailable } from '../../../_shared/llm-health';
 import { sanitizeHeadlinesLight, sanitizeHeadlines, sanitizeForPrompt } from '../../../_shared/llm-sanitize.js';
+import { isCallerPremium } from '../../../_shared/premium-check';
+import { stripThinkingTags } from '../../../_shared/llm';
 
 // ======================================================================
 // Reasoning preamble detection
@@ -34,10 +36,12 @@ export function hasReasoningPreamble(text: string): boolean {
 // ======================================================================
 
 export async function summarizeArticle(
-  _ctx: ServerContext,
+  ctx: ServerContext,
   req: SummarizeArticleRequest,
 ): Promise<SummarizeArticleResponse> {
+  const isPremium = await isCallerPremium(ctx.request);
   const { provider, mode = 'brief', geoContext = '', variant = 'full', lang = 'en' } = req;
+  const systemAppend = isPremium && typeof req.systemAppend === 'string' ? req.systemAppend : '';
 
   const MAX_HEADLINES = 10;
   const MAX_HEADLINE_LEN = 500;
@@ -97,7 +101,7 @@ export async function summarizeArticle(
   }
 
   try {
-    const cacheKey = getCacheKey(headlines, mode, sanitizedGeoContext, variant, lang);
+    const cacheKey = getCacheKey(headlines, mode, sanitizedGeoContext, variant, lang, systemAppend || undefined);
 
     // Single atomic call — source tracking happens inside cachedFetchJsonWithMeta,
     // eliminating the TOCTOU race between a separate getCachedJson and cachedFetchJson.
@@ -120,13 +124,18 @@ export async function summarizeArticle(
           lang,
         });
 
+        const sanitizedAppend = systemAppend ? sanitizeForPrompt(systemAppend) : '';
+        const effectiveSystemPrompt = sanitizedAppend
+          ? `${systemPrompt}\n\n---\n\n${sanitizedAppend}`
+          : systemPrompt;
+
         const response = await fetch(apiUrl, {
           method: 'POST',
           headers: { ...providerHeaders, 'User-Agent': CHROME_UA },
           body: JSON.stringify({
             model,
             messages: [
-              { role: 'system', content: systemPrompt },
+              { role: 'system', content: effectiveSystemPrompt },
               { role: 'user', content: userPrompt },
             ],
             temperature: 0.3,
@@ -146,24 +155,8 @@ export async function summarizeArticle(
         const data = await response.json() as any;
         const tokens = (data.usage?.total_tokens as number) || 0;
         const message = data.choices?.[0]?.message;
-        let rawContent = typeof message?.content === 'string' ? message.content.trim() : '';
-
-        rawContent = rawContent
-          .replace(/<think>[\s\S]*?<\/think>/gi, '')
-          .replace(/<\|thinking\|>[\s\S]*?<\|\/thinking\|>/gi, '')
-          .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
-          .replace(/<reflection>[\s\S]*?<\/reflection>/gi, '')
-          .replace(/<\|begin_of_thought\|>[\s\S]*?<\|end_of_thought\|>/gi, '')
-          .trim();
-
-        // Strip unterminated thinking blocks (no closing tag)
-        rawContent = rawContent
-          .replace(/<think>[\s\S]*/gi, '')
-          .replace(/<\|thinking\|>[\s\S]*/gi, '')
-          .replace(/<reasoning>[\s\S]*/gi, '')
-          .replace(/<reflection>[\s\S]*/gi, '')
-          .replace(/<\|begin_of_thought\|>[\s\S]*/gi, '')
-          .trim();
+        const rawText = typeof message?.content === 'string' ? message.content.trim() : '';
+        let rawContent = stripThinkingTags(rawText);
 
         if (['brief', 'analysis'].includes(mode) && rawContent.length < 20) {
           console.warn(`[SummarizeArticle:${provider}] Output too short after stripping (${rawContent.length} chars), rejecting`);

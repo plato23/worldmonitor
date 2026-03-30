@@ -30,6 +30,8 @@ import { listDefiTokens } from './list-defi-tokens';
 import { listAiTokens } from './list-ai-tokens';
 import { listOtherTokens } from './list-other-tokens';
 import { getFearGreedIndex } from './get-fear-greed-index';
+import { listEarningsCalendar } from './list-earnings-calendar';
+import { getCotPositioning } from './get-cot-positioning';
 
 export const marketHandler: MarketServiceHandler = {
   listMarketQuotes,
@@ -49,4 +51,6 @@ export const marketHandler: MarketServiceHandler = {
   listAiTokens,
   listOtherTokens,
   getFearGreedIndex,
+  listEarningsCalendar,
+  getCotPositioning,
 };

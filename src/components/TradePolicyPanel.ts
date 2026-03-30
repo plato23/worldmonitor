@@ -456,12 +456,16 @@ export class TradePolicyPanel extends Panel {
       return `<div class="economic-empty">${t('components.tradePolicy.noComtradeData')}</div>`;
     }
 
-    // Show world-total rows only (partnerCode "000"), deduplicated to latest year per reporter+commodity.
-    // Two-step dedup: (1) within same (reporter, cmd, year) keep max tradeValueUsd (exports vs imports);
+    // Prefer world-total rows: UN Comtrade API returns partnerCode as integer 0 for world aggregates,
+    // stored as string "0"; "000" is the seed fallback default. If no world-total rows exist
+    // (bilateral-only preview data), fall back to all flows so the table is never empty.
+    // Two-step dedup: (1) within same (reporter, cmd, year) keep max tradeValueUsd
+    //   — world-total path: disambiguates exports vs imports; fallback path: keeps highest-value bilateral entry;
     // (2) then keep latest year per (reporter, cmd).
-    const worldTotals = flows.filter(f => f.partnerCode === '000');
+    const worldTotals = flows.filter(f => f.partnerCode === '0' || f.partnerCode === '000');
+    const toDedup = worldTotals.length > 0 ? worldTotals : flows;
     const byYearDominant = new Map<string, typeof flows[0]>();
-    for (const f of worldTotals) {
+    for (const f of toDedup) {
       const key = `${f.reporterCode}:${f.cmdCode}:${f.year}`;
       const existing = byYearDominant.get(key);
       if (!existing || f.tradeValueUsd > existing.tradeValueUsd) byYearDominant.set(key, f);
@@ -486,7 +490,7 @@ export class TradePolicyPanel extends Panel {
         ? `$${(f.tradeValueUsd / 1e9).toFixed(1)}B`
         : `$${(f.tradeValueUsd / 1e6).toFixed(0)}M`;
       const anomalyBadge = f.isAnomaly
-        ? `<span class="trade-anomaly-badge">${t('components.tradePolicy.anomalyBadge')}</span>`
+        ? `<span style="margin-left:6px;font-size:9px;font-weight:600;letter-spacing:0.05em;padding:1px 5px;border-radius:3px;background:rgba(255,68,68,0.15);color:var(--red);vertical-align:middle;text-transform:uppercase">${t('components.tradePolicy.anomalyBadge')}</span>`
         : '';
       return `<tr class="${f.isAnomaly ? 'trade-anomaly-row' : ''}">
         <td>${escapeHtml(f.reporterName)}${anomalyBadge}</td>

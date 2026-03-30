@@ -549,6 +549,69 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Error'
+    /api/market/v1/list-earnings-calendar:
+        get:
+            tags:
+                - MarketService
+            summary: ListEarningsCalendar
+            description: ListEarningsCalendar retrieves upcoming and recent earnings releases.
+            operationId: ListEarningsCalendar
+            parameters:
+                - name: fromDate
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+                - name: toDate
+                  in: query
+                  required: false
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ListEarningsCalendarResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
+    /api/market/v1/get-cot-positioning:
+        get:
+            tags:
+                - MarketService
+            summary: GetCotPositioning
+            description: GetCotPositioning retrieves CFTC COT institutional positioning data.
+            operationId: GetCotPositioning
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetCotPositioningResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                default:
+                    description: Error response
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Error'
 components:
     schemas:
         Error:
@@ -1445,6 +1508,21 @@ components:
                     type: string
                 unavailable:
                     type: boolean
+                fsiValue:
+                    type: number
+                    format: double
+                fsiLabel:
+                    type: string
+                hygPrice:
+                    type: number
+                    format: double
+                tltPrice:
+                    type: number
+                    format: double
+                sectorPerformance:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/FearGreedSectorPerformance'
         FearGreedCategory:
             type: object
             properties:
@@ -1461,3 +1539,106 @@ components:
                     type: boolean
                 inputsJson:
                     type: string
+        FearGreedSectorPerformance:
+            type: object
+            properties:
+                symbol:
+                    type: string
+                name:
+                    type: string
+                change1d:
+                    type: number
+                    format: double
+        ListEarningsCalendarRequest:
+            type: object
+            properties:
+                fromDate:
+                    type: string
+                toDate:
+                    type: string
+        ListEarningsCalendarResponse:
+            type: object
+            properties:
+                earnings:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/EarningsEntry'
+                fromDate:
+                    type: string
+                toDate:
+                    type: string
+                total:
+                    type: integer
+                    format: int32
+                unavailable:
+                    type: boolean
+        EarningsEntry:
+            type: object
+            properties:
+                symbol:
+                    type: string
+                company:
+                    type: string
+                date:
+                    type: string
+                hour:
+                    type: string
+                epsEstimate:
+                    type: number
+                    format: double
+                revenueEstimate:
+                    type: number
+                    format: double
+                epsActual:
+                    type: number
+                    format: double
+                revenueActual:
+                    type: number
+                    format: double
+                hasActuals:
+                    type: boolean
+                surpriseDirection:
+                    type: string
+        GetCotPositioningRequest:
+            type: object
+        GetCotPositioningResponse:
+            type: object
+            properties:
+                instruments:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/CotInstrument'
+                reportDate:
+                    type: string
+                unavailable:
+                    type: boolean
+        CotInstrument:
+            type: object
+            properties:
+                name:
+                    type: string
+                code:
+                    type: string
+                reportDate:
+                    type: string
+                assetManagerLong:
+                    type: string
+                    format: int64
+                assetManagerShort:
+                    type: string
+                    format: int64
+                leveragedFundsLong:
+                    type: string
+                    format: int64
+                leveragedFundsShort:
+                    type: string
+                    format: int64
+                dealerLong:
+                    type: string
+                    format: int64
+                dealerShort:
+                    type: string
+                    format: int64
+                netPct:
+                    type: number
+                    format: double

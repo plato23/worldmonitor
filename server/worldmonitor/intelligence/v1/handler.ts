@@ -1,6 +1,7 @@
 import type { IntelligenceServiceHandler } from '../../../../src/generated/server/worldmonitor/intelligence/v1/service_server';
 
 import { getRiskScores } from './get-risk-scores';
+import { getCountryRisk } from './get-country-risk';
 import { getPizzintStatus } from './get-pizzint-status';
 import { classifyEvent } from './classify-event';
 import { getCountryIntelBrief } from './get-country-intel-brief';
@@ -17,9 +18,11 @@ import { listCompanySignals } from './list-company-signals';
 import { getGdeltTopicTimeline } from './get-gdelt-topic-timeline';
 import { listCrossSourceSignals } from './list-cross-source-signals';
 import { listMarketImplications } from './list-market-implications';
+import { getSocialVelocity } from './get-social-velocity';
 
 export const intelligenceHandler: IntelligenceServiceHandler = {
   getRiskScores,
+  getCountryRisk,
   getPizzintStatus,
   classifyEvent,
   getCountryIntelBrief,
@@ -36,4 +39,5 @@ export const intelligenceHandler: IntelligenceServiceHandler = {
   getGdeltTopicTimeline,
   listCrossSourceSignals,
   listMarketImplications,
+  getSocialVelocity,
 };

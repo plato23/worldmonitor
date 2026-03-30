@@ -1,39 +1,9 @@
 #!/usr/bin/env node
 
-import { loadEnvFile, CHROME_UA, runSeed, readSeedSnapshot, sleep } from './_seed-utils.mjs';
-import { execFileSync } from 'child_process';
+import { loadEnvFile, CHROME_UA, runSeed, readSeedSnapshot, sleep, resolveProxyForConnect } from './_seed-utils.mjs';
 loadEnvFile(import.meta.url);
 
-// Proxy for Yahoo Finance — Railway container IPs get blocked by Yahoo after restarts.
-// Supports PROXY_URL="host:port:user:pass" (Decodo) or OREF_PROXY_AUTH="user:pass@host:port" (Froxy).
-function resolveProxy() {
-  const raw = process.env.PROXY_URL || '';
-  if (raw) {
-    const parts = raw.split(':');
-    if (parts.length === 4) {
-      const [host, port, user, pass] = parts;
-      return `${user}:${pass}@${host.replace(/^gate\./, 'us.')}:${port}`;
-    }
-    return raw;
-  }
-  return process.env.OREF_PROXY_AUTH || '';
-}
-const _proxyAuth = resolveProxy();
-
-// curl-based fetch for sources that block Railway IPs (Yahoo Finance).
-// Returns response body as string; throws on non-2xx.
-function curlFetch(url, headers = {}) {
-  const args = ['-sS', '--compressed', '--max-time', '15', '-L'];
-  if (_proxyAuth) args.push('-x', `http://${_proxyAuth}`);
-  for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
-  args.push('-w', '\n%{http_code}');
-  args.push(url);
-  const raw = execFileSync('curl', args, { encoding: 'utf8', timeout: 20000, stdio: ['pipe', 'pipe', 'pipe'] });
-  const nl = raw.lastIndexOf('\n');
-  const status = parseInt(raw.slice(nl + 1).trim(), 10);
-  if (status < 200 || status >= 300) throw Object.assign(new Error(`HTTP ${status}`), { status });
-  return raw.slice(0, nl);
-}
+const _proxyAuth = resolveProxyForConnect();
 
 const FEAR_GREED_KEY = 'market:fear-greed:v1';
 const FEAR_GREED_TTL = 64800; // 18h = 3x 6h interval
@@ -41,19 +11,16 @@ const FEAR_GREED_TTL = 64800; // 18h = 3x 6h interval
 const FRED_PREFIX = 'economic:fred:v1';
 
 // --- Yahoo Finance fetching (15 symbols, 150ms gaps) ---
-const YAHOO_SYMBOLS = ['^GSPC','^VIX','^VIX9D','^VIX3M','^SKEW','C:ISSU','GLD','TLT','SPY','RSP','DX-Y.NYB','XLK','XLF','XLE','XLV'];
+const YAHOO_SYMBOLS = ['^GSPC','^VIX','^VIX9D','^VIX3M','^SKEW','GLD','TLT','HYG','SPY','RSP','DX-Y.NYB','XLK','XLF','XLE','XLV','XLY','XLP','XLI','XLB','XLU','XLRE','XLC'];
 
 async function fetchYahooSymbol(symbol) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1y`;
   const headers = { 'User-Agent': CHROME_UA, Accept: 'application/json' };
   try {
-    // Use curl+proxy when available — Railway container IPs are periodically blocked by Yahoo.
-    const text = _proxyAuth
-      ? curlFetch(url, headers)
-      : await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).then(r => {
-          if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
-          return r.text();
-        });
+    const text = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).then(r => {
+      if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+      return r.text();
+    });
     const data = JSON.parse(text);
     const result = data?.chart?.result?.[0];
     if (!result) return null;
@@ -126,7 +93,9 @@ async function fetchCNN() {
     if (!resp.ok) { console.warn(`  CNN F&G: HTTP ${resp.status}`); return null; }
     const data = await resp.json();
     const score = data?.score ?? data?.fear_and_greed?.score;
-    const rating = data?.rating ?? data?.fear_and_greed?.rating;
+    const rawRating = data?.rating ?? data?.fear_and_greed?.rating;
+    const VALID_CNN_LABELS = new Set(['Extreme Fear', 'Fear', 'Neutral', 'Greed', 'Extreme Greed']);
+    const rating = (typeof rawRating === 'string' && VALID_CNN_LABELS.has(rawRating)) ? rawRating : null;
     return score != null ? { score: Math.round(score), label: rating ?? labelFromScore(Math.round(score)) } : null;
   } catch (e) { console.warn(`  CNN F&G: ${e.message}`); return null; }
 }
@@ -273,8 +242,9 @@ function scoreCategory(name, inputs) {
       if (vix == null) return { score: 50, inputs };
       // VIX range 12–35: neutral at ~23.5 (historical avg ~19-20). Old range 12-40 centered neutral at VIX=26 — too permissive.
       const vixScore = clamp(100 - ((vix - 12) / 23) * 100, 0, 100);
-      const termScore = (vix9d != null && vix3m != null) ? (vix / vix3m < 1 ? 70 : 30) : 50;
-      const termStructure = (vix9d != null && vix3m != null) ? (vix / vix3m < 1 ? 'contango' : 'backwardation') : 'unknown';
+      // Gate on vix3m only — vix9d is display-only and its absence shouldn't suppress the term structure signal.
+      const termScore = vix3m != null ? (vix / vix3m < 1 ? 70 : 30) : 50;
+      const termStructure = vix3m != null ? (vix / vix3m < 1 ? 'contango' : 'backwardation') : 'unknown';
       return { score: Math.round(vixScore * 0.7 + termScore * 0.3), inputs: { vix, vix9d, vix3m, termStructure } };
     }
     case 'positioning': {
@@ -318,11 +288,13 @@ function scoreCategory(name, inputs) {
     }
     case 'liquidity': {
       const { m2Obs, walclObs, sofr } = inputs;
-      const m2Latest = fredLatest(m2Obs), m2Ago = fredNMonthsAgo(m2Obs, 12);
+      // M2SL is weekly since 2021 — 52 observations back = 52 weeks = true YoY. Using 12 was ~13 weeks (quarterly).
+      const m2Latest = fredLatest(m2Obs), m2Ago = fredNMonthsAgo(m2Obs, 52);
       const m2Yoy = (m2Latest && m2Ago && m2Ago !== 0) ? ((m2Latest - m2Ago) / m2Ago) * 100 : null;
-      const walclLatest = fredLatest(walclObs), walclAgo = fredNMonthsAgo(walclObs, 1);
+      // WALCL is weekly — 4 observations back = ~1 month (MoM). Using 1 was week-over-week (too noisy).
+      const walclLatest = fredLatest(walclObs), walclAgo = fredNMonthsAgo(walclObs, 4);
       const fedBsMom = (walclLatest && walclAgo && walclAgo !== 0) ? ((walclLatest - walclAgo) / walclAgo) * 100 : null;
-      // M2 YoY: normal annual growth is 4-6%; use 5x multiplier so 5% YoY ≈ 75 (not pegged at 100 like 10x was)
+      // M2 YoY: normal annual growth is 4-6%; use 5x multiplier so 5% YoY ≈ 75
       const m2Score = m2Yoy != null ? clamp(m2Yoy * 5 + 50, 0, 100) : 50;
       const fedScore = fedBsMom != null ? clamp(fedBsMom * 20 + 50, 0, 100) : 50;
       const sofrScore = sofr != null ? clamp(100 - sofr * 15, 0, 100) : 50;
@@ -407,10 +379,11 @@ async function fetchAll() {
   const vix9d = yahoo['^VIX9D'];
   const vix3m = yahoo['^VIX3M'];
   const skew = yahoo['^SKEW'];
-  const cissu = yahoo['C:ISSU'];
-  const gld = yahoo['GLD'], tlt = yahoo['TLT'], spy = yahoo['SPY'], rsp = yahoo['RSP'];
+  const gld = yahoo['GLD'], tlt = yahoo['TLT'], hyg = yahoo['HYG'], spy = yahoo['SPY'], rsp = yahoo['RSP'];
   const dxy = yahoo['DX-Y.NYB'];
   const xlk = yahoo['XLK'], xlf = yahoo['XLF'], xle = yahoo['XLE'], xlv = yahoo['XLV'];
+  const xly = yahoo['XLY'], xlp = yahoo['XLP'], xli = yahoo['XLI'], xlb = yahoo['XLB'];
+  const xlu = yahoo['XLU'], xlre = yahoo['XLRE'], xlc = yahoo['XLC'];
 
   const vixLive = vixData?.price ?? fredLatest(vixObs);
   const vix9dPrice = vix9d?.price ?? null;
@@ -424,18 +397,13 @@ async function fetchAll() {
   const pctAbove200d = barchartResult.status === 'fulfilled' ? barchartResult.value : null;
   const cryptoFg = macro?.fearGreed?.score ?? macro?.signals?.fearGreed?.value ?? null;
 
-  let advDecRatio = null;
-  if (cissu?.price != null) {
-    advDecRatio = cissu.price > 0 ? Math.min(cissu.price / 100, 2.0) : null;
-  }
-
   const cats = {
     sentiment: scoreCategory('sentiment', { cnnFg: cnn?.score ?? null, aaiBull: aaii?.bull ?? null, aaiBear: aaii?.bear ?? null, cryptoFg }),
     volatility: scoreCategory('volatility', { vix: vixLive, vix9d: vix9dPrice, vix3m: vix3mPrice }),
     positioning: scoreCategory('positioning', { totalPc: cboe.totalPc, equityPc: cboe.equityPc, skew: skewPrice }),
     trend: scoreCategory('trend', { prices: gspc?.closes ?? [] }),
-    breadth: scoreCategory('breadth', { mmthPrice: pctAbove200d, rspCloses: rsp?.closes, spyCloses: spy?.closes, advDecRatio }),
-    momentum: scoreCategory('momentum', { spxCloses: gspc?.closes, sectorCloses: { XLK: xlk?.closes, XLF: xlf?.closes, XLE: xle?.closes, XLV: xlv?.closes } }),
+    breadth: scoreCategory('breadth', { mmthPrice: pctAbove200d, rspCloses: rsp?.closes, spyCloses: spy?.closes, advDecRatio: null }),
+    momentum: scoreCategory('momentum', { spxCloses: gspc?.closes, sectorCloses: { XLK: xlk?.closes, XLF: xlf?.closes, XLE: xle?.closes, XLV: xlv?.closes, XLY: xly?.closes, XLP: xlp?.closes, XLI: xli?.closes, XLB: xlb?.closes, XLU: xlu?.closes, XLRE: xlre?.closes, XLC: xlc?.closes } }),
     liquidity: scoreCategory('liquidity', { m2Obs, walclObs, sofr: sofrRate }),
     credit: scoreCategory('credit', { hyObs, igObs }),
     macro: scoreCategory('macro', { fedObs, curveObs, unrateObs }),
@@ -450,6 +418,27 @@ async function fetchAll() {
   const fedRate = fredLatest(fedObs);
   const fedRateStr = fedRate != null ? `${fedRate.toFixed(2)}%` : null;
   const hySpreadVal = fredLatest(hyObs);
+
+  const hygPrice = hyg?.price ?? null;
+  const tltPrice = tlt?.price ?? null;
+  let fsiValue = null;
+  let fsiLabel = 'Unknown';
+  if (hygPrice != null && tltPrice != null && tltPrice > 0 && vixLive != null && vixLive > 0 && hySpreadVal != null && hySpreadVal > 0) {
+    fsiValue = Math.round(((hygPrice / tltPrice) / (vixLive * hySpreadVal / 100)) * 10000) / 10000;
+    if (fsiValue >= 1.5) fsiLabel = 'Low Stress';
+    else if (fsiValue >= 0.8) fsiLabel = 'Moderate Stress';
+    else if (fsiValue >= 0.3) fsiLabel = 'Elevated Stress';
+    else fsiLabel = 'High Stress';
+  }
+
+  const SECTOR_ETF_NAMES = { XLK: 'Technology', XLF: 'Financials', XLE: 'Energy', XLV: 'Health Care', XLY: 'Consumer Discr.', XLP: 'Consumer Staples', XLI: 'Industrials', XLB: 'Materials', XLU: 'Utilities', XLRE: 'Real Estate', XLC: 'Comm. Services' };
+  const sectorPerformance = Object.entries(SECTOR_ETF_NAMES).map(([sym, name]) => {
+    const d = yahoo[sym];
+    if (!d?.closes || d.closes.length < 2) return null;
+    const prev = d.closes.at(-2), curr = d.closes.at(-1);
+    const change1d = (prev && prev > 0) ? Math.round(((curr - prev) / prev) * 10000) / 100 : null;
+    return change1d != null ? { symbol: sym, name, change1d } : null;
+  }).filter(Boolean);
 
   const payload = {
     timestamp: new Date().toISOString(),
@@ -476,7 +465,9 @@ async function fetchAll() {
       pctAbove200d: pctAbove200d != null ? { value: pctAbove200d } : null,
       yield10y: fredLatest(dgs10Obs) != null ? { value: fredLatest(dgs10Obs) } : null,
       fedRate:  fedRateStr ? { value: fedRateStr } : null,
+      fsi:      fsiValue != null ? { value: fsiValue, label: fsiLabel, hygPrice, tltPrice } : null,
     },
+    sectorPerformance,
     unavailable: false,
   };
 

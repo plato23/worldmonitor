@@ -464,13 +464,14 @@ function extractRadiationAnomaly(d) {
   const anomalies = observations.filter(o => o.alert || o.status === 'alert' || safeNum(o.value) > safeNum(o.threshold) * 1.5);
   if (anomalies.length === 0) return [];
   return anomalies.slice(0, 2).map(a => {
-    const theater = normalizeTheater(a.country || a.region || a.location || '');
+    const locationStr = a.locationName || a.stationName || a.country || a.region || 'unknown station';
+    const theater = normalizeTheater(a.country || a.region || locationStr);
     const score = BASE_WEIGHT['CROSS_SOURCE_SIGNAL_TYPE_RADIATION_ANOMALY'];
     return {
-      id: `radiation:${a.id || a.stationId || (a.location || a.stationName || 'unknown').replace(/\s+/g, '-').toLowerCase()}`,
+      id: `radiation:${a.id || a.stationId || locationStr.replace(/\s+/g, '-').toLowerCase()}`,
       type: 'CROSS_SOURCE_SIGNAL_TYPE_RADIATION_ANOMALY',
       theater,
-      summary: `Radiation anomaly: ${a.location || a.stationName || 'unknown station'} — ${a.value || 'elevated'} reading`,
+      summary: `Radiation anomaly: ${locationStr} — ${a.value || 'elevated'} reading`,
       severity: scoreTier(score),
       severityScore: score,
       detectedAt: safeNum(a.timestamp) || safeNum(a.measuredAt) || Date.now(),

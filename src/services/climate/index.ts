@@ -40,7 +40,7 @@ export interface ClimateFetchResult {
 }
 
 const client = new ClimateServiceClient(getRpcBaseUrl(), { fetch: (...args) => globalThis.fetch(...args) });
-const breaker = createCircuitBreaker<ListClimateAnomaliesResponse>({ name: 'Climate Anomalies', cacheTtlMs: 10 * 60 * 1000, persistCache: true });
+const breaker = createCircuitBreaker<ListClimateAnomaliesResponse>({ name: 'Climate Anomalies', cacheTtlMs: 20 * 60 * 1000, persistCache: true });
 
 const emptyClimateFallback: ListClimateAnomaliesResponse = { anomalies: [] };
 
@@ -53,7 +53,7 @@ export async function fetchClimateAnomalies(): Promise<ClimateFetchResult> {
 
   const response = await breaker.execute(async () => {
     return client.listClimateAnomalies({ minSeverity: 'ANOMALY_SEVERITY_UNSPECIFIED', pageSize: 0, cursor: '' });
-  }, emptyClimateFallback);
+  }, emptyClimateFallback, { shouldCache: (r) => r.anomalies.length > 0 });
   const anomalies = (response.anomalies ?? [])
     .map(toDisplayAnomaly)
     .filter(a => a.severity !== 'normal');
