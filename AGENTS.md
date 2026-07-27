@@ -4,7 +4,7 @@ Agent entry point for WorldMonitor. Read this first, then follow links for depth
 
 ## What This Project Is
 
-Real-time global intelligence dashboard. TypeScript SPA (Vite + Preact) with 179 top-level TypeScript component files, 80+ Vercel Edge API endpoint entries, a Tauri desktop app with Node.js sidecar, and a Railway relay service. Aggregates geopolitics, military, finance, climate, cyber, maritime, and aviation data across 35 freshness-tracked source groups.
+Real-time global intelligence dashboard. TypeScript SPA (Vite; no UI framework — class-based components, with exactly one stray Preact component in `src/components/VerificationChecklist.ts`) with 179 top-level TypeScript component files, 80+ Vercel Edge API endpoint entries, a Tauri desktop app with Node.js sidecar, and a Railway relay service. Aggregates geopolitics, military, finance, climate, cyber, maritime, and aviation data across 35 freshness-tracked source groups.
 
 ## Repository Map
 
@@ -179,7 +179,7 @@ Variant is set via `VITE_VARIANT` env var. Config lives in `src/config/variants/
 
 - Redis (Upstash) via `server/_shared/redis.ts`
 - `cachedFetchJson()` coalesces concurrent cache misses
-- Cache tiers: fast (5m), medium (10m), slow (30m), static (2h), daily (24h)
+- Cache tiers (edge s-maxage / CDN): fast (5m/10m), medium (10m/20m), slow (30m/1h), static (1h/4h), daily (4h/24h)
 - Cache key MUST include request-varying params
 
 ## Testing
